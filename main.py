@@ -1,4 +1,6 @@
 import errno, stat
+import io
+
 import fuse
 import iroh
 import logging
@@ -50,6 +52,18 @@ class IrohDocFS:
     def _on_change(self):
         self.logger.debug("event: on_change")
 
+    def _sync(self, path):
+        self.logger.debug("sync: " + path)
+        stat_block = loads(self.iroh_doc.get_exact(self.iroh_author, path + '.stat'))
+        if path in self.write_buffer:
+            try:
+                existing = self.iroh_doc.get_exact(self.iroh_author, path + '.data')
+                self.iroh_doc.set_bytes(self.iroh_author, path + '.data', existing + io.BytesIO(self.write_buffer[path]))
+                self._on_change()
+                del self.write_buffer[path]
+            except Exception as e:
+                return -errno.EIO
+
     def getattr(self, path):
         self.logger.debug("getattr: " + path)
         st = BaseStat()
@@ -93,6 +107,17 @@ class IrohDocFS:
             self._on_change()
         except Exception as e:
             return -errno.EIO
+
+    def read(self, path, size, offset):
+        self.logger.debug("read: " + path)
+        try:
+            self._sync(path)
+            # some_bytes = self.ipfs_conn.files.read(self.root_path + path, offset, size)
+            some_bytes = self.iroh_doc.get_exact(self.iroh_author, path + '.data')
+            # @TODO: deal with offset and size
+        except Exception as e:
+            return -errno.ENOENT
+        return some_bytes
 
 
 def main():
