@@ -131,7 +131,10 @@ class IrohDocFS:
 
     def _walk(self, path):
         self.logger.debug("walk: " + path)
-        return self._walk_from_node(self.root_node, path.split("/"))
+        try:
+            return self._walk_from_node(self.root_node, path.split("/"))
+        except Exception as e:
+            return None, None
 
     def _persist(self, parent, name, node):
         return self.iroh_doc.set_bytes(self.iroh_author, "fs:%s:%s.json" % (parent.get('uuid'), name), dumps(node))
@@ -164,44 +167,43 @@ class IrohDocFS:
 
     def read(self, path, size, offset):
         self.logger.debug("read: " + path)
-        try:
-            _, node = self._walk(path)
-            some_bytes = self._read(node, size, offset)
-        except Exception as e:
+
+        _, node = self._walk(path)
+        if not node:
             return -errno.ENOENT
-        return some_bytes
+
+        try:
+            return self._read(node, size, offset)
+        except Exception as e:
+            return -errno.EIO
 
     def rename(self, path, path1):
         self.logger.debug('moving: ' + path + ' -> ' + path1)
         # Reference: https://www.man7.org/linux/man-pages/man2/rename.2.html
         # Load the source
-        try:
-            from_key, from_node = self._walk(path)
-        except Exception as e:
-            return -errno.EIO
+        from_key, from_node = self._walk(path)
+        if not from_node:
+            return -errno.ENOENT
 
         # Try to load the dest, could fail non-fatally
-        to_exists = True
-        try:
-            to_key, to_node = self._walk(path1)
-        except Exception as e:
-            to_exists = False
+        to_key, to_node = self._walk(path1)
 
-        # Do the stuff from the manpage here
-        if to_exists:
-            pass
+        if to_node:
+            if to_node.get('type') == 'file' and from_node('type') == 'dir':
+                return -errno.ENOTDIR
         else:
+            # If dest doesh't exist, check if its parent does
             # Walk to parent and construct to_key
-            to_key = ''
-            pass
+            to_parent_key, to_parent_node = self._walk(os.path.dirname(path1))
+            if not to_parent_node:
+                return -errno.ENOENT
+            to_key = "fs:%s:%s.json" % (to_parent_node.get('uuid'), os.path.basename(path1))
 
         # OK, try the "rename" (copy & delete)
         try:
-            # @TODO: Ugh, ok, we need to rethink this
-            # Probably need to return key, node from _walk)
-            # And ... finding the key for the target path :(
             self.iroh_doc.set_bytes(self.iroh_author, to_key,
-                                    self.iroh_doc.get_exact(self.iroh_author, path + '.stat'))
+                                    self.iroh_doc.get_exact(self.iroh_author, from_node))
+            self.iroh_doc.delete(self.iroh_author, from_key)
             self._on_change()
             self.logger.debug('moved: ' + path + ' -> ' + path1)
         except Exception as e:
