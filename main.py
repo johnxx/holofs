@@ -109,11 +109,11 @@ class IrohDocFS:
         self.logger.debug('mtime: ' + path + "(" + str(mtime) + ")")
 
     def _load_root(self):
-        return loads(self.iroh_doc.get_exact(self.iroh_author, 'root.jspn')
-                                       )
+        return loads(self.iroh_doc.get_exact(self.iroh_author, 'root.json'))
+
     def _load_node(self, dir_uuid, name):
         key = "fs:%s:%s.json" % (dir_uuid, name)
-        return self.iroh_doc.get_exact(self.iroh_author, key)
+        return key, self.iroh_doc.get_exact(self.iroh_author, key)
 
     def _list_children(self, node):
         prefix = "fs:%s:" % node.get('uuid')
@@ -126,20 +126,21 @@ class IrohDocFS:
         elif len(path) == 1:
             return self._load_node(node.get('uuid'), path[0])
         else:
-            return self._walk_from_node(self._load_node(node.get('uuid'), path[0]), path[1:])
+            _, target = self._load_node(node.get('uuid'), path[0])
+            return self._walk_from_node(target, path[1:])
 
     def _walk(self, path):
         self.logger.debug("walk: " + path)
         return self._walk_from_node(self.root_node, path.split("/"))
 
-    def _persist(self, parent, name, node)
+    def _persist(self, parent, name, node):
         return self.iroh_doc.set_bytes(self.iroh_author, "fs:%s:%s.json" % (parent.get('uuid'), name), dumps(node))
 
     def mkdir(self, path, mode):
         self.logger.debug("mkdir: " + path)
         dir_uuid = uuid.uuid4()
         parent_path, name = path.rsplit('/', 1)
-        parent_node = self._walk(parent_path)
+        _, parent_node = self._walk(parent_path)
         new_stat = BaseStat()
         new_stat.st_mode = stat.S_IFDIR | 0o755
         new_stat.st_nlink = 2
@@ -154,21 +155,52 @@ class IrohDocFS:
         except Exception as e:
             return -errno.EIO
 
+    def _read(self, node, size, offset):
+        if node.get('type') == 'dir':
+            return -errno.EIO
+        key = "data:%s" % node.get('data')
+        # @TODO: see if offset and size handling is even vaguely correct
+        return self.iroh_doc.get_exact(self.iroh_author, key)[offset:offset + size]
+
     def read(self, path, size, offset):
         self.logger.debug("read: " + path)
         try:
-            self._sync(path)
-            # some_bytes = self.ipfs_conn.files.read(self.root_path + path, offset, size)
-            some_bytes = self.iroh_doc.get_exact(self.iroh_author, path + '.data')[offset:offset + size]
-            # @TODO: see if offset and size handling is even vaguely correct
+            _, node = self._walk(path)
+            some_bytes = self._read(node, size, offset)
         except Exception as e:
             return -errno.ENOENT
         return some_bytes
 
     def rename(self, path, path1):
+        self.logger.debug('moving: ' + path + ' -> ' + path1)
+        # Reference: https://www.man7.org/linux/man-pages/man2/rename.2.html
+        # Load the source
         try:
-            self.ipfs_conn.files.mv(self.root_path + path, self.root_path + path1)
-            self.iroh_doc.set_bytes(self.iroh_author, path1 + '.stat',
+            from_key, from_node = self._walk(path)
+        except Exception as e:
+            return -errno.EIO
+
+        # Try to load the dest, could fail non-fatally
+        to_exists = True
+        try:
+            to_key, to_node = self._walk(path1)
+        except Exception as e:
+            to_exists = False
+
+        # Do the stuff from the manpage here
+        if to_exists:
+            pass
+        else:
+            # Walk to parent and construct to_key
+            to_key = ''
+            pass
+
+        # OK, try the "rename" (copy & delete)
+        try:
+            # @TODO: Ugh, ok, we need to rethink this
+            # Probably need to return key, node from _walk)
+            # And ... finding the key for the target path :(
+            self.iroh_doc.set_bytes(self.iroh_author, to_key,
                                     self.iroh_doc.get_exact(self.iroh_author, path + '.stat'))
             self._on_change()
             self.logger.debug('moved: ' + path + ' -> ' + path1)
