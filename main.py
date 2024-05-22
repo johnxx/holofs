@@ -28,7 +28,7 @@ class BaseStat(fuse.Stat):
     def to_dict(self):
         return vars(self)
 
-class IrohDocFS:
+class IrohDocFS(Fuse):
 
     write_buffer = {}
 
@@ -61,24 +61,25 @@ class IrohDocFS:
     def _on_change(self):
         self.logger.debug("event: on_change")
 
-    def _sync(self, path):
-        self.logger.debug("sync: " + path)
-        stat_block = loads(self.iroh_doc.get_exact(self.iroh_author, path + '.stat'))
-        if path in self.write_buffer:
-            try:
-                existing = self.iroh_doc.get_exact(self.iroh_author, path + '.data')
-                self.iroh_doc.set_bytes(self.iroh_author, path + '.data', existing + io.BytesIO(self.write_buffer[path]))
-                self._on_change()
-                del self.write_buffer[path]
-            except Exception as e:
-                return -errno.EIO
+    # def _sync(self, path):
+    #     self.logger.debug("sync: " + path)
+    #     stat_block = loads(self.iroh_doc.get_exact(self.iroh_author, path + '.stat'))
+    #     if path in self.write_buffer:
+    #         try:
+    #             existing = self.iroh_doc.get_exact(self.iroh_author, path + '.data')
+    #             self.iroh_doc.set_bytes(self.iroh_author, path + '.data', existing + io.BytesIO(self.write_buffer[path]))
+    #             self._on_change()
+    #             del self.write_buffer[path]
+    #         except Exception as e:
+    #             return -errno.EIO
 
     def getattr(self, path):
         self.logger.debug("getattr: " + path)
         st = BaseStat()
         try:
-            self._sync(path)
-            stat_block = loads(self.iroh_doc.get_exact(self.iroh_author, path + '.stat'))
+            # self._sync(path)
+            _, node = self._walk(path)
+            stat_block = node.get('stat')
         except Exception as e:
             return -errno.ENOENT
 
@@ -93,31 +94,35 @@ class IrohDocFS:
 
     def readdir(self, path, offset):
         self.logger.debug("readdir: " + path)
-        entries = loads(self.iroh_doc.get_exact(self.iroh_author, path + '.dir')).get('Entries', None)
-        result = [{
-
-        }]
-        if entries:
-            for entry in entries:
-                result.append(fuse.Direntry(entry.get('Name')))
-                # @TODO: Does not play nice with cache
-                # yield fuse.Direntry(entry.get('Name'))
-        return result
+        _, node = self._walk(path)
+        return self._dir_entries(node)
 
     def utime(self, path, times):
         (utime, mtime) = times
         self.logger.debug('mtime: ' + path + "(" + str(mtime) + ")")
 
     def _load_root(self):
-        return loads(self.iroh_doc.get_exact(self.iroh_author, 'root.json'))
+        key = 'root.json'
+        return key, loads(self.iroh_doc.get_exact(self.iroh_author, key).content_bytes(self.iroh_doc))
 
     def _load_node(self, dir_uuid, name):
         key = "fs:%s:%s.json" % (dir_uuid, name)
-        return key, self.iroh_doc.get_exact(self.iroh_author, key)
+        return key, loads(self.iroh_doc.get_exact(self.iroh_author, key).content_bytes(self.iroh_doc))
+
+    def _dir_entries(self, node):
+        children = self._list_children(node)
+        entries = [
+            fuse.Direntry('.'),
+            fuse.Direntry('..')
+        ]
+        for child in children:
+            name = child.get('key').split(':', 2)[2].removesuffix('.json')
+            entries.append(fuse.Direntry(name))
+        return entries
 
     def _list_children(self, node):
         prefix = "fs:%s:" % node.get('uuid')
-        query = iroh.Query.key_prefix(prefix)
+        query = iroh.Query.key_prefix(prefix, None)
         return self.iroh_doc.get_many(self.iroh_author, query)
 
     def _walk_from_node(self, node, path):
@@ -158,12 +163,15 @@ class IrohDocFS:
         except Exception as e:
             return -errno.EIO
 
-    def _read(self, node, size, offset):
+    def _read(self, node, size=0, offset=0):
         if node.get('type') == 'dir':
             return -errno.EIO
         key = "data:%s" % node.get('data')
         # @TODO: see if offset and size handling is even vaguely correct
-        return self.iroh_doc.get_exact(self.iroh_author, key)[offset:offset + size]
+        if size == 0:
+            return self.iroh_doc.get_exact(self.iroh_author, key).content_bytes(self.iroh_doc)[offset:]
+        else:
+            return self.iroh_doc.get_exact(self.iroh_author, key).content_bytes(self.iroh_doc)[offset:offset + size]
 
     def read(self, path, size, offset):
         self.logger.debug("read: " + path)
@@ -176,6 +184,17 @@ class IrohDocFS:
             return self._read(node, size, offset)
         except Exception as e:
             return -errno.EIO
+
+    def _write(self, node, buf, offset):
+        contents = self._read(node)
+        contents[offset:offset + len(buf)] += buf
+        data_key = node.get('data')
+        return self.iroh_doc.set_bytes(self.iroh_author, data_key, contents)
+
+    def write(self, path, buf, offset):
+        self.logger.debug("write: " + path + "@" + str(offset))
+        key, node = self._walk(path)
+        return self._write(node, buf, offset)
 
     def rename(self, path, path1):
         self.logger.debug('moving: ' + path + ' -> ' + path1)
@@ -202,7 +221,7 @@ class IrohDocFS:
         # OK, try the "rename" (copy & delete)
         try:
             self.iroh_doc.set_bytes(self.iroh_author, to_key,
-                                    self.iroh_doc.get_exact(self.iroh_author, from_node))
+                                    self.iroh_doc.get_exact(self.iroh_author, from_node).content_bytes(self.iroh_doc))
             self.iroh_doc.delete(self.iroh_author, from_key)
             self._on_change()
             self.logger.debug('moved: ' + path + ' -> ' + path1)
