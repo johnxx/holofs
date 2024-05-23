@@ -12,8 +12,10 @@ from json import dumps, loads
 
 IROH_DATA_DIR = "./iroh_data_dir"
 
+fuse.fuse_python_api = (0, 2)
+
 class BaseStat(fuse.Stat):
-    def __init__(self):
+    def __init__(self, *initial_data, **kwargs):
         self.st_mode = 0
         self.st_ino = 0
         self.st_dev = 0
@@ -24,6 +26,11 @@ class BaseStat(fuse.Stat):
         self.st_atime = 0
         self.st_mtime = 0
         self.st_ctime = 0
+        for dictionary in initial_data:
+            for key in dictionary:
+                setattr(self, key, dictionary[key])
+        for key in kwargs:
+            setattr(self, key, kwargs[key])
 
     def to_dict(self):
         return vars(self)
@@ -43,7 +50,7 @@ class IrohDocFS(Fuse):
         self.logger = self._setup_logging(log_level)
 
         # Find the root of the file system
-        self.root_node = self._load_root()
+        self.root_key, self.root_node = self._load_root()
 
     def _setup_logging(self, log_level):
         logger = logging.getLogger('IrohDocFS')
@@ -56,6 +63,7 @@ class IrohDocFS(Fuse):
         return logger
 
     def main(self, *args, **kwargs):
+        self.logger.debug("entered: Fuse.main()")
         return Fuse.main(self, *args, **kwargs)
 
     def _on_change(self):
@@ -75,22 +83,15 @@ class IrohDocFS(Fuse):
 
     def getattr(self, path):
         self.logger.debug("getattr: " + path)
-        st = BaseStat()
         try:
             # self._sync(path)
             _, node = self._walk(path)
-            stat_block = node.get('stat')
-        except Exception as e:
-            return -errno.ENOENT
-
-        if stat_block.get('Type') == 'directory':
+            st = BaseStat(node.get('stat'))
             st.st_mode = stat.S_IFDIR | 0o755
             st.st_nlink = 2
-        else:
-            st.st_mode = stat.S_IFREG | 0o644
-            st.st_nlink = 1
-            st.st_size = stat_block.get('Size', 0)
-        return st
+            return st
+        except Exception as e:
+            return -errno.ENOENT
 
     def readdir(self, path, offset):
         self.logger.debug("readdir: " + path)
@@ -102,12 +103,13 @@ class IrohDocFS(Fuse):
         self.logger.debug('mtime: ' + path + "(" + str(mtime) + ")")
 
     def _load_root(self):
-        key = 'root.json'
-        return key, loads(self.iroh_doc.get_exact(self.iroh_author, key).content_bytes(self.iroh_doc))
+        key = b'root.json'
+        return key, loads(self.iroh_doc.get_exact(self.iroh_author, key, include_empty=True).content_bytes(self.iroh_doc))
 
     def _load_node(self, dir_uuid, name):
+        self.logger.debug("load: " + dir_uuid + ":" + name)
         key = "fs:%s:%s.json" % (dir_uuid, name)
-        return key, loads(self.iroh_doc.get_exact(self.iroh_author, key).content_bytes(self.iroh_doc))
+        return key, loads(self.iroh_doc.get_exact(self.iroh_author, key.encode('utf-8'), include_empty=True).content_bytes(self.iroh_doc))
 
     def _dir_entries(self, node):
         children = self._list_children(node)
@@ -116,38 +118,41 @@ class IrohDocFS(Fuse):
             fuse.Direntry('..')
         ]
         for child in children:
-            name = child.get('key').split(':', 2)[2].removesuffix('.json')
+            name = child.key().decode('utf-8').split(':', 2)[2].removesuffix('.json')
             entries.append(fuse.Direntry(name))
         return entries
 
     def _list_children(self, node):
         prefix = "fs:%s:" % node.get('uuid')
-        query = iroh.Query.key_prefix(prefix, None)
-        return self.iroh_doc.get_many(self.iroh_author, query)
+        query = iroh.Query.key_prefix(prefix.encode('utf-8'), None)
+        return self.iroh_doc.get_many(query)
 
     def _walk_from_node(self, node, path):
-        if len(path) == 0:
-            return node
+        self.logger.debug("walk_from_node: " + str(path))
+        if path[0] == '':
+            return 'root.json', node
         elif len(path) == 1:
             return self._load_node(node.get('uuid'), path[0])
         else:
-            _, target = self._load_node(node.get('uuid'), path[0])
+            _, target = self._load_node(node.get('uuid'), path[1])
             return self._walk_from_node(target, path[1:])
 
     def _walk(self, path):
         self.logger.debug("walk: " + path)
         try:
-            return self._walk_from_node(self.root_node, path.split("/"))
+            return self._walk_from_node(self.root_node, path.split("/")[1:])
         except Exception as e:
             return None, None
 
     def _persist(self, parent, name, node):
-        return self.iroh_doc.set_bytes(self.iroh_author, "fs:%s:%s.json" % (parent.get('uuid'), name), dumps(node))
+        key = "fs:%s:%s.json" % (parent.get('uuid'), name)
+        return self.iroh_doc.set_bytes(self.iroh_author, key.encode('utf-8'), dumps(node).encode('utf-8'))
 
     def mkdir(self, path, mode):
         self.logger.debug("mkdir: " + path)
-        dir_uuid = uuid.uuid4()
-        parent_path, name = path.rsplit('/', 1)
+        dir_uuid = str(uuid.uuid4())
+        parent_path = os.path.dirname(path)
+        name = os.path.basename(path)
         _, parent_node = self._walk(parent_path)
         new_stat = BaseStat()
         new_stat.st_mode = stat.S_IFDIR | 0o755
@@ -163,15 +168,18 @@ class IrohDocFS(Fuse):
         except Exception as e:
             return -errno.EIO
 
+    def open(self, path, flags):
+        self.mfs_logger.debug("open: " + path)
+
     def _read(self, node, size=0, offset=0):
         if node.get('type') == 'dir':
             return -errno.EIO
-        key = "data:%s" % node.get('data')
+        key = b"data:%s" % node.get('data')
         # @TODO: see if offset and size handling is even vaguely correct
         if size == 0:
-            return self.iroh_doc.get_exact(self.iroh_author, key).content_bytes(self.iroh_doc)[offset:]
+            return self.iroh_doc.get_exact(self.iroh_author, key, include_empty=True).content_bytes(self.iroh_doc)[offset:]
         else:
-            return self.iroh_doc.get_exact(self.iroh_author, key).content_bytes(self.iroh_doc)[offset:offset + size]
+            return self.iroh_doc.get_exact(self.iroh_author, key, include_empty=True).content_bytes(self.iroh_doc)[offset:offset + size]
 
     def read(self, path, size, offset):
         self.logger.debug("read: " + path)
@@ -182,6 +190,38 @@ class IrohDocFS(Fuse):
 
         try:
             return self._read(node, size, offset)
+        except Exception as e:
+            return -errno.EIO
+
+    def mknod(self, path, mode, dev):
+        self.mfs_logger.debug("mknod: " + path)
+
+        _, node_exists = self._read(path)
+        if node_exists:
+            return -errno.EEXIST
+
+        try:
+            data_uuid = str(uuid.uuid4())
+            parent_path = os.path.dirname(path)
+            name = os.path.basename(path)
+            _, parent_node = self._walk(parent_path)
+            new_stat = BaseStat()
+            new_stat.st_mode = stat.S_IFREG | 0o644
+            new_stat.st_nlink = 1
+            new_file = {
+                "type": "dir",
+                "stat": new_stat.to_dict(),
+                "data": data_uuid
+            }
+            try:
+                self._persist(parent_node, name, new_fil)
+                self._on_change()
+            except Exception as e:
+                return -errno.EIO
+
+            data_key = node.get('data')
+            return self.iroh_doc.set_bytes(self.iroh_author, data_key, b'')
+            self._on_change()
         except Exception as e:
             return -errno.EIO
 
@@ -221,14 +261,14 @@ class IrohDocFS(Fuse):
         # OK, try the "rename" (copy & delete)
         try:
             self.iroh_doc.set_bytes(self.iroh_author, to_key,
-                                    self.iroh_doc.get_exact(self.iroh_author, from_node).content_bytes(self.iroh_doc))
+                                    self.iroh_doc.get_exact(self.iroh_author, from_key, include_empty=True).content_bytes(self.iroh_doc))
             self.iroh_doc.delete(self.iroh_author, from_key)
             self._on_change()
             self.logger.debug('moved: ' + path + ' -> ' + path1)
         except Exception as e:
             return -errno.EIO
 
-def main():
+if __name__ == '__main__':
     usage = """
     Naive FUSE-on-Iroh Test
     """ + Fuse.fusage
@@ -236,11 +276,35 @@ def main():
     node = iroh.IrohNode(IROH_DATA_DIR)
     print("Started Iroh node: {}".format(node.node_id()))
 
-    author = node.author_create()
-    print("Created author: {}".format(author.to_string()))
+    # author = node.author_create()
+    # print("Created author: {}".format(author.to_string()))
 
-    doc = node.doc_create()
-    print("Created doc: {}".format(doc.id().to_string()))
+    # doc = node.doc_create()
+    # print("Created doc: {}".format(doc.id()))
+
+    # Started Iroh node: uqcobn3t767mtwbe27mvcv4njt3xyaekvidwer3ewfixbuzzijbq
+    # Created author: a3cooqmeejt4azujv7a3vmwibne7ibxxwxd56fqu6gtw3uq2faea
+    # Created doc: 5scnsj263r5mfg3rtll7opgb7c2lt2vl6azhpy2drkov2uyi57aq
+
+    author_id = 'a3cooqmeejt4azujv7a3vmwibne7ibxxwxd56fqu6gtw3uq2faea'
+    author = iroh.AuthorId.from_string(author_id)
+    print("Assumed author: {}".format(author.to_string()))
+
+    doc_id = '5scnsj263r5mfg3rtll7opgb7c2lt2vl6azhpy2drkov2uyi57aq'
+    doc = node.doc_open(doc_id)
+    print("Opened doc: {}".format(doc.id()))
+
+    root_node = doc.get_exact(author, b'root.json', include_empty=False)
+    if not root_node:
+        new_stat = BaseStat()
+        new_stat.st_mode = stat.S_IFDIR | 0o755
+        new_stat.st_nlink = 2
+        newfs = {
+            'type': 'dir',
+            "stat": new_stat.to_dict(),
+            'uuid': str(uuid.uuid4())
+        }
+        doc.set_bytes(author,  b'root.json', dumps(newfs).encode('utf-8'))
     server = IrohDocFS(
         version="%prog " + fuse.__version__,
         usage=usage,
@@ -250,7 +314,3 @@ def main():
 
     server.parse(errex=1)
     server.main()
-
-
-if __name__ == '__main__':
-    main()
