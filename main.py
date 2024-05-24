@@ -102,11 +102,12 @@ class IrohDocFS(Fuse):
 
     def _load_root(self):
         key = b'root.json'
+        self.logger.debug("load: " + str(key))
         return key, loads(self.iroh_doc.get_exact(self.iroh_author, key, include_empty=True).content_bytes(self.iroh_doc))
 
     def _load_node(self, dir_uuid, name):
-        self.logger.debug("load: " + dir_uuid + ":" + name)
         key = "fs:%s:%s.json" % (dir_uuid, name)
+        self.logger.debug("load: " + key)
         return key, loads(self.iroh_doc.get_exact(self.iroh_author, key.encode('utf-8'), include_empty=True).content_bytes(self.iroh_doc))
 
     def _dir_entries(self, node):
@@ -132,7 +133,7 @@ class IrohDocFS(Fuse):
         elif len(path) == 1:
             return self._load_node(node.get('uuid'), path[0])
         else:
-            _, target = self._load_node(node.get('uuid'), path[1])
+            _, target = self._load_node(node.get('uuid'), path[0])
             return self._walk_from_node(target, path[1:])
 
     def _walk(self, path):
@@ -140,6 +141,7 @@ class IrohDocFS(Fuse):
         try:
             return self._walk_from_node(self.root_node, path.split("/")[1:])
         except Exception as e:
+            print(str(e))
             return None, None
 
     def _persist(self, parent, name, node):
@@ -170,14 +172,23 @@ class IrohDocFS(Fuse):
     def open(self, path, flags):
         self.logger.debug("open: " + path)
 
+    def _data_key(self, node):
+        return "data:%s" % node.get('data')
+
+    def _node_key(self, parent_uuid, name):
+       return "fs:%s:%s.json" % parent_uuid, name
+
     def _read(self, node, size=0, offset=0):
         if node.get('type') == 'dir':
+            print("HONK!")
             return -errno.EIO
-        key = b"data:%s" % node.get('data')
+        key = self._data_key(node)
         # @TODO: see if offset and size handling is even vaguely correct
         if size == 0:
+            print("HONK1")
             return self.iroh_doc.get_exact(self.iroh_author, key, include_empty=True).content_bytes(self.iroh_doc)[offset:]
         else:
+            print("HONK2")
             return self.iroh_doc.get_exact(self.iroh_author, key, include_empty=True).content_bytes(self.iroh_doc)[offset:offset + size]
 
     def read(self, path, size, offset):
@@ -208,31 +219,36 @@ class IrohDocFS(Fuse):
         new_stat.st_mode = stat.S_IFREG | 0o644
         new_stat.st_nlink = 1
         new_file = {
-            "type": "dir",
+            "type": "file",
             "stat": new_stat.to_dict(),
             "data": data_uuid
         }
         try:
             self._persist(parent_node, name, new_file)
-            self._on_change()
             data_key = 'data:%s' % new_file.get('data')
-            self._on_change()
             print('set key: ' + data_key)
-            return self.iroh_doc.set_bytes(self.iroh_author, data_key.encode('utf-8'), b'\x00')
+            self.iroh_doc.set_bytes(self.iroh_author, data_key.encode('utf-8'), b'\x00')
+            self._on_change()
         except Exception as e:
             print(str(e))
             return -errno.EIO
 
     def _write(self, node, buf, offset):
+        # Yeah, that's definitely not ... write
         contents = self._read(node)
-        contents[offset:offset + len(buf)] += buf
-        data_key = node.get('data')
-        return self.iroh_doc.set_bytes(self.iroh_author, data_key, contents)
+        contents = contents[:offset] + buf + contents[offset + len(buf):]
+        data_key = self._data_key(node)
+        print('key: ' + data_key + "@" + str(offset) + " contents: " + str(contents))
+        self.iroh_doc.set_bytes(self.iroh_author, data_key.encode('utf-8'), contents)
 
     def write(self, path, buf, offset):
         self.logger.debug("write: " + path + "@" + str(offset))
-        key, node = self._walk(path)
-        return self._write(node, buf, offset)
+        try:
+            key, node = self._walk(path)
+            self._write(node, buf, offset)
+            self._on_change()
+        except Exception as e:
+            return -errno.EIO
 
     def rename(self, path, path1):
         self.logger.debug('moving: ' + path + ' -> ' + path1)
@@ -266,6 +282,25 @@ class IrohDocFS(Fuse):
         except Exception as e:
             return -errno.EIO
 
+    def fsync(self, path, isfsyncfile):
+        pass
+
+    def statfs(self):
+        return os.statvfs(".")
+
+    def truncate(self, path, length):
+        self.logger.debug("truncate: " + path)
+        if length == 0:
+            try:
+                key, node = self._walk(path)
+                self._write(node, b'\x00', 0)
+                self._on_change()
+            except Exception as e:
+                print(str(e))
+                return -errno.EIO
+        else:
+            return -errno.EIO
+
 if __name__ == '__main__':
     usage = """
     Naive FUSE-on-Iroh Test
@@ -280,16 +315,11 @@ if __name__ == '__main__':
     # doc = node.doc_create()
     # print("Created doc: {}".format(doc.id()))
 
-    # Started Iroh node: 4yddispesvpqo5tuldpirreahivociq6dcz4ui2udyfu5m7qa3ia
-    # Created author: p6yaenzoo6riqurhkmr7n53on2nllefn3ceohqmonan7wt2xmiqa
-    # Created doc: ff6uuzmoesmko7olwgmkw3i5in63gf36hmboreuvl4xaad2hdkkq
-
-
-    author_id = 'p6yaenzoo6riqurhkmr7n53on2nllefn3ceohqmonan7wt2xmiqa'
+    author_id = 'a3cooqmeejt4azujv7a3vmwibne7ibxxwxd56fqu6gtw3uq2faea'
     author = iroh.AuthorId.from_string(author_id)
     print("Assumed author: {}".format(author.to_string()))
 
-    doc_id = 'ff6uuzmoesmko7olwgmkw3i5in63gf36hmboreuvl4xaad2hdkkq'
+    doc_id = '5scnsj263r5mfg3rtll7opgb7c2lt2vl6azhpy2drkov2uyi57aq'
     doc = node.doc_open(doc_id)
     print("Opened doc: {}".format(doc.id()))
 
