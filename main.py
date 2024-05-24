@@ -87,8 +87,6 @@ class IrohDocFS(Fuse):
             # self._sync(path)
             _, node = self._walk(path)
             st = BaseStat(node.get('stat'))
-            st.st_mode = stat.S_IFDIR | 0o755
-            st.st_nlink = 2
             return st
         except Exception as e:
             return -errno.ENOENT
@@ -146,6 +144,7 @@ class IrohDocFS(Fuse):
 
     def _persist(self, parent, name, node):
         key = "fs:%s:%s.json" % (parent.get('uuid'), name)
+        self.logger.debug("persist: " + key)
         return self.iroh_doc.set_bytes(self.iroh_author, key.encode('utf-8'), dumps(node).encode('utf-8'))
 
     def mkdir(self, path, mode):
@@ -169,7 +168,7 @@ class IrohDocFS(Fuse):
             return -errno.EIO
 
     def open(self, path, flags):
-        self.mfs_logger.debug("open: " + path)
+        self.logger.debug("open: " + path)
 
     def _read(self, node, size=0, offset=0):
         if node.get('type') == 'dir':
@@ -191,38 +190,37 @@ class IrohDocFS(Fuse):
         try:
             return self._read(node, size, offset)
         except Exception as e:
+            print(str(e))
             return -errno.EIO
 
     def mknod(self, path, mode, dev):
-        self.mfs_logger.debug("mknod: " + path)
+        self.logger.debug("mknod: " + path)
 
-        _, node_exists = self._read(path)
+        _, node_exists = self._walk(path)
         if node_exists:
             return -errno.EEXIST
 
+        data_uuid = str(uuid.uuid4())
+        parent_path = os.path.dirname(path)
+        name = os.path.basename(path)
+        _, parent_node = self._walk(parent_path)
+        new_stat = BaseStat()
+        new_stat.st_mode = stat.S_IFREG | 0o644
+        new_stat.st_nlink = 1
+        new_file = {
+            "type": "dir",
+            "stat": new_stat.to_dict(),
+            "data": data_uuid
+        }
         try:
-            data_uuid = str(uuid.uuid4())
-            parent_path = os.path.dirname(path)
-            name = os.path.basename(path)
-            _, parent_node = self._walk(parent_path)
-            new_stat = BaseStat()
-            new_stat.st_mode = stat.S_IFREG | 0o644
-            new_stat.st_nlink = 1
-            new_file = {
-                "type": "dir",
-                "stat": new_stat.to_dict(),
-                "data": data_uuid
-            }
-            try:
-                self._persist(parent_node, name, new_fil)
-                self._on_change()
-            except Exception as e:
-                return -errno.EIO
-
-            data_key = node.get('data')
-            return self.iroh_doc.set_bytes(self.iroh_author, data_key, b'')
+            self._persist(parent_node, name, new_file)
             self._on_change()
+            data_key = 'data:%s' % new_file.get('data')
+            self._on_change()
+            print('set key: ' + data_key)
+            return self.iroh_doc.set_bytes(self.iroh_author, data_key.encode('utf-8'), b'\x00')
         except Exception as e:
+            print(str(e))
             return -errno.EIO
 
     def _write(self, node, buf, offset):
@@ -282,26 +280,27 @@ if __name__ == '__main__':
     # doc = node.doc_create()
     # print("Created doc: {}".format(doc.id()))
 
-    # Started Iroh node: uqcobn3t767mtwbe27mvcv4njt3xyaekvidwer3ewfixbuzzijbq
-    # Created author: a3cooqmeejt4azujv7a3vmwibne7ibxxwxd56fqu6gtw3uq2faea
-    # Created doc: 5scnsj263r5mfg3rtll7opgb7c2lt2vl6azhpy2drkov2uyi57aq
+    # Started Iroh node: 4yddispesvpqo5tuldpirreahivociq6dcz4ui2udyfu5m7qa3ia
+    # Created author: p6yaenzoo6riqurhkmr7n53on2nllefn3ceohqmonan7wt2xmiqa
+    # Created doc: ff6uuzmoesmko7olwgmkw3i5in63gf36hmboreuvl4xaad2hdkkq
 
-    author_id = 'a3cooqmeejt4azujv7a3vmwibne7ibxxwxd56fqu6gtw3uq2faea'
+
+    author_id = 'p6yaenzoo6riqurhkmr7n53on2nllefn3ceohqmonan7wt2xmiqa'
     author = iroh.AuthorId.from_string(author_id)
     print("Assumed author: {}".format(author.to_string()))
 
-    doc_id = '5scnsj263r5mfg3rtll7opgb7c2lt2vl6azhpy2drkov2uyi57aq'
+    doc_id = 'ff6uuzmoesmko7olwgmkw3i5in63gf36hmboreuvl4xaad2hdkkq'
     doc = node.doc_open(doc_id)
     print("Opened doc: {}".format(doc.id()))
 
     root_node = doc.get_exact(author, b'root.json', include_empty=False)
     if not root_node:
-        new_stat = BaseStat()
-        new_stat.st_mode = stat.S_IFDIR | 0o755
-        new_stat.st_nlink = 2
+        root_stat = BaseStat()
+        root_stat.st_mode = stat.S_IFDIR | 0o755
+        root_stat.st_nlink = 2
         newfs = {
             'type': 'dir',
-            "stat": new_stat.to_dict(),
+            "stat": root_stat.to_dict(),
             'uuid': str(uuid.uuid4())
         }
         doc.set_bytes(author,  b'root.json', dumps(newfs).encode('utf-8'))
