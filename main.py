@@ -167,6 +167,7 @@ class IrohDocFS(Fuse):
             self._persist(parent_node, name, new_dir)
             self._on_change()
         except Exception as e:
+            print(str(e))
             return -errno.EIO
 
     def open(self, path, flags):
@@ -180,16 +181,13 @@ class IrohDocFS(Fuse):
 
     def _read(self, node, size=0, offset=0):
         if node.get('type') == 'dir':
-            print("HONK!")
-            return -errno.EIO
+            return -errno.EISDIR
         key = self._data_key(node)
         # @TODO: see if offset and size handling is even vaguely correct
         if size == 0:
-            print("HONK1")
-            return self.iroh_doc.get_exact(self.iroh_author, key, include_empty=True).content_bytes(self.iroh_doc)[offset:]
+            return self.iroh_doc.get_exact(self.iroh_author, key.encode('utf-8'), include_empty=True).content_bytes(self.iroh_doc)[offset:]
         else:
-            print("HONK2")
-            return self.iroh_doc.get_exact(self.iroh_author, key, include_empty=True).content_bytes(self.iroh_doc)[offset:offset + size]
+            return self.iroh_doc.get_exact(self.iroh_author, key.encode('utf-8'), include_empty=True).content_bytes(self.iroh_doc)[offset:offset + size]
 
     def read(self, path, size, offset):
         self.logger.debug("read: " + path)
@@ -199,7 +197,9 @@ class IrohDocFS(Fuse):
             return -errno.ENOENT
 
         try:
-            return self._read(node, size, offset)
+            res = self._read(node, size, offset)
+            print(res)
+            return res
         except Exception as e:
             print(str(e))
             return -errno.EIO
@@ -246,8 +246,13 @@ class IrohDocFS(Fuse):
         try:
             key, node = self._walk(path)
             self._write(node, buf, offset)
+            # @TODO: _write needs to return bytes written I think, or something
+            node['stat']['st_size'] = len(buf)
+            self.iroh_doc.set_bytes(self.iroh_author, key.encode('utf-8'), dumps(node).encode('utf-8'))
             self._on_change()
+            return node['stat']['st_size']
         except Exception as e:
+            print(str(e))
             return -errno.EIO
 
     def rename(self, path, path1):
@@ -280,6 +285,7 @@ class IrohDocFS(Fuse):
             self._on_change()
             self.logger.debug('moved: ' + path + ' -> ' + path1)
         except Exception as e:
+            print(str(e))
             return -errno.EIO
 
     def fsync(self, path, isfsyncfile):
@@ -299,6 +305,7 @@ class IrohDocFS(Fuse):
                 print(str(e))
                 return -errno.EIO
         else:
+            self.logger.debug("truncate: " + path + " failed: non-zero truncate unsupported")
             return -errno.EIO
 
 if __name__ == '__main__':
@@ -306,8 +313,8 @@ if __name__ == '__main__':
     Naive FUSE-on-Iroh Test
     """ + Fuse.fusage
 
-    node = iroh.IrohNode(IROH_DATA_DIR)
-    print("Started Iroh node: {}".format(node.node_id()))
+    iroh_node = iroh.IrohNode(IROH_DATA_DIR)
+    print("Started Iroh node: {}".format(iroh_node.node_id()))
 
     # author = node.author_create()
     # print("Created author: {}".format(author.to_string()))
@@ -315,12 +322,18 @@ if __name__ == '__main__':
     # doc = node.doc_create()
     # print("Created doc: {}".format(doc.id()))
 
-    author_id = 'a3cooqmeejt4azujv7a3vmwibne7ibxxwxd56fqu6gtw3uq2faea'
+    # Schala
+    author_id = 'p6yaenzoo6riqurhkmr7n53on2nllefn3ceohqmonan7wt2xmiqa'
+    # Satsuki
+    # author_id = 'a3cooqmeejt4azujv7a3vmwibne7ibxxwxd56fqu6gtw3uq2faea'
     author = iroh.AuthorId.from_string(author_id)
     print("Assumed author: {}".format(author.to_string()))
 
-    doc_id = '5scnsj263r5mfg3rtll7opgb7c2lt2vl6azhpy2drkov2uyi57aq'
-    doc = node.doc_open(doc_id)
+    # Schala
+    doc_id = 'ff6uuzmoesmko7olwgmkw3i5in63gf36hmboreuvl4xaad2hdkkq'
+    # Satsuki
+    # doc_id = '5scnsj263r5mfg3rtll7opgb7c2lt2vl6azhpy2drkov2uyi57aq'
+    doc = iroh_node.doc_open(doc_id)
     print("Opened doc: {}".format(doc.id()))
 
     root_node = doc.get_exact(author, b'root.json', include_empty=False)
