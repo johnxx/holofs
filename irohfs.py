@@ -37,7 +37,29 @@ class IrohStat(fuse.Stat):
 
 
 class IrohFS(Fuse):
-    pass
+    def __init__(self, *args, **kwargs):
+        self.iroh_doc = kwargs.pop('doc')
+        self.iroh_author = kwargs.pop('author')
+        super(IrohFS, self).__init__(*args, **kwargs)
+        # Debug logging
+        log_level = logging.WARN
+        self.logger = self._setup_logging(log_level)
+
+    def _setup_logging(self, log_level):
+        logger = logging.getLogger('IrohFS')
+        logger.setLevel(log_level)
+        console = logging.StreamHandler()
+        formatter = logging.Formatter('%(asctime)s %(levelname)s | %(message)s')
+        console.setFormatter(formatter)
+        console.setLevel(log_level)
+        logger.addHandler(console)
+        return logger
+
+    def main(self, *args, **kwargs):
+        self.logger.info("entered: Fuse.main()")
+        return Fuse.main(self, *args, **kwargs)
+
+    # @TODO: Draw the rest of the fucking owl
 
 
 if __name__ == '__main__':
