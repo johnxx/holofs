@@ -40,10 +40,14 @@ class IrohFS(Fuse):
     def __init__(self, *args, **kwargs):
         self.iroh_doc = kwargs.pop('doc')
         self.iroh_author = kwargs.pop('author')
+
         super(IrohFS, self).__init__(*args, **kwargs)
+
         # Debug logging
-        log_level = logging.WARN
+        log_level = logging.INFO
+
         self.logger = self._setup_logging(log_level)
+        self.root_key, self.root_node = self._load_root()
 
     def _setup_logging(self, log_level):
         logger = logging.getLogger('IrohFS')
@@ -105,8 +109,7 @@ class IrohFS(Fuse):
             fuse.Direntry('..')
         ]
         for child in children:
-            name = child.key().decode('utf-8').split(':', 2)[2].removesuffix('.json')
-            entries.append(fuse.Direntry(name))
+            entries.append(self._dir_entry_from_key(child.key()))
         return entries
 
     def _list_children(self, node):
@@ -149,6 +152,11 @@ class IrohFS(Fuse):
     def _entry_key(self, parent_uuid, name, node_uuid):
         return "fs/%s/%s/%s.json" % (parent_uuid, name, node_uuid)
 
+    def _dir_entry_from_key(self, key):
+        elements = key.decode('utf-8').split('/')
+        name = elements[2].removesuffix('.json')
+        return fuse.Direntry(name)
+
     def _persist(self, parent, name, node):
         stat_key = self._stat_key(node.get('uuid'))
         entry_key = self._entry_key(parent.get('uuid'), name, node.get('uuid'))
@@ -180,8 +188,60 @@ class IrohFS(Fuse):
             print(traceback.format_exc())
             return -errno.EIO
 
+    def mknod(self, path, mode, dev):
+        self.logger.info("mknod: " + path)
+
+        _, node_exists = self._walk(path)
+        if node_exists:
+            return -errno.EEXIST
+
+        data_uuid = str(uuid.uuid4())
+        parent_path = os.path.dirname(path)
+        name = os.path.basename(path)
+        _, parent_node = self._walk(parent_path)
+        new_stat = IrohStat()
+        new_stat.st_mode = stat.S_IFREG | 0o644
+        new_stat.st_nlink = 1
+        new_file = {
+            "type": "file",
+            "stat": new_stat.to_dict(),
+            "data": data_uuid
+        }
+        try:
+            self._persist(parent_node, name, new_file)
+            data_key = 'data:%s' % new_file.get('data')
+            self.iroh_doc.set_bytes(self.iroh_author, data_key.encode('utf-8'), b'\x00')
+            self._on_change()
+        except Exception as e:
+            # print(str(e))
+            print(traceback.format_exc())
+            return -errno.EIO
+
     def open(self, path, flags):
         self.logger.info("open: " + path)
+        key, node = self._walk(path)
+        return self.IrohFile(node, flags)
+
+    def create(self, path, flags, mode):
+        self.logger.info("create: " + path)
+        traceback.print_stack()
+        return self.IrohFile(None, flags)
+
+    class IrohFile(object):
+        def __init__(self, node, flags):
+            print("----- OPENED FILE -----")
+
+        def read(self, length, offset):
+            print("---- OBJ READ ----")
+
+        def write(self, buf, offset):
+            print("---- OBJ WRITE ----")
+
+        def fgetattr(self):
+            print("---- OBJ STAT ----")
+
+        def ftruncate(self, length):
+            print("---- OBJ TRUNCATE ----")
 
 
 if __name__ == '__main__':
