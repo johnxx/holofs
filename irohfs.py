@@ -68,7 +68,7 @@ class IrohFS(Fuse):
         try:
             # self._sync(path)
             _, node = self._walk(path)
-            st = BaseStat(node.get('stat'))
+            st = IrohStat(node.get('stat'))
             return st
         except Exception as e:
             return -errno.ENOENT
@@ -140,24 +140,38 @@ class IrohFS(Fuse):
             self.logger.info("_walk: " + path + ": file not found")
             return None, None
 
+    def _stat_key(self, node_uuid):
+        return "stat/%s.json" % node_uuid
+
+    def _data_key(self, node_uuid):
+        return "data/%s.json" % node_uuid
+
+    def _entry_key(self, parent_uuid, name, node_uuid):
+        return "fs/%s/%s/%s.json" % (parent_uuid, name, node_uuid)
+
     def _persist(self, parent, name, node):
-        key = "fs:%s:%s.json" % (parent.get('uuid'), name)
-        self.logger.info("persist: " + key)
-        return self.iroh_doc.set_bytes(self.iroh_author, key.encode('utf-8'), dumps(node).encode('utf-8'))
+        stat_key = self._stat_key(node.get('uuid'))
+        entry_key = self._entry_key(parent.get('uuid'), name, node.get('uuid'))
+        self.logger.info("dir entry: " + entry_key + " stat: " + stat_key)
+        self.iroh_doc.set_bytes(self.iroh_author, stat_key.encode('utf-8'), dumps(node).encode('utf-8'))
+        self.iroh_doc.set_bytes(self.iroh_author, entry_key.encode('utf-8'), b'\x00')
 
     def mkdir(self, path, mode):
         self.logger.info("mkdir: " + path)
-        node_uuid = str(uuid.uuid4())
+
         parent_path = os.path.dirname(path)
-        name = os.path.basename(path)
         _, parent_node = self._walk(parent_path)
+
+        name = os.path.basename(path)
+        node_uuid = str(uuid.uuid4())
+
         new_stat = IrohStat()
         new_stat.st_mode = stat.S_IFDIR | 0o755
         new_stat.st_nlink = 2
         new_dir = {
             "type": "dir",
             "stat": new_stat.to_dict(),
-            "uuid": dir_uuid
+            "uuid": node_uuid
         }
         try:
             self._persist(parent_node, name, new_dir)
