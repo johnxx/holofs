@@ -12,6 +12,15 @@ from json import dumps, loads
 
 fuse.fuse_python_api = (0, 2)
 
+def _flag2mode(flags):
+    md = {os.O_RDONLY: 'rb', os.O_WRONLY: 'wb', os.O_RDWR: 'wb+'}
+    m = md[flags & (os.O_RDONLY | os.O_WRONLY | os.O_RDWR)]
+
+    if flags | os.O_APPEND:
+        m = m.replace('w', 'a', 1)
+
+    return m
+
 class IrohStat(fuse.Stat):
     def __init__(self, *initial_data, **kwargs):
 
@@ -40,6 +49,7 @@ class IrohFS(Fuse):
     def __init__(self, *args, **kwargs):
         self.iroh_doc = kwargs.pop('doc')
         self.iroh_author = kwargs.pop('author')
+        self.state_dir = kwargs.pop('state_dir')
 
         super(IrohFS, self).__init__(*args, **kwargs)
 
@@ -63,19 +73,29 @@ class IrohFS(Fuse):
         self.logger.info("entered: Fuse.main()")
         return Fuse.main(self, *args, **kwargs)
 
-    # @TODO: Draw the rest of the fucking owl
     def _on_change(self):
         self.logger.info("event: on_change")
 
-    def getattr(self, path, fh=None):
+    def fgetattr(self, path, fh):
+        self.logger.info("fgetattr: " + path)
+        node = fh['node']
+        if not node:
+            try:
+                self.logger.warning("fgetattr: called without fh!")
+                _, node = self._walk(path)
+            except Exception as e:
+                return -errno.ENOENT
+        return IrohStat(node.get('stat'))
+
+
+    def getattr(self, path):
         self.logger.info("getattr: " + path)
-        print(fh)
         try:
-            # self._sync(path)
             _, node = self._walk(path)
             st = IrohStat(node.get('stat'))
             return st
         except Exception as e:
+            self.logger.info("getattr: " + path + ": no such file or directory")
             return -errno.ENOENT
 
     def readdir(self, path, offset):
@@ -104,13 +124,15 @@ class IrohFS(Fuse):
         query = iroh.Query.key_prefix(entry_key_prefix.encode('utf-8'), None)
         # @TODO: This should be a get many that we filter
         entry = self.iroh_doc.get_one(query)
-        elements = entry.key().decode('utf-8').split('/').removesuffix('.json')
-        stat_key = self._stat_key(elements[-1])
-        return stat_key
+        if entry:
+            elements = entry.key().decode('utf-8').split('/')
+            stat_key = self._stat_key(elements[-1].removesuffix('.json'))
+            return stat_key
+        else:
+            return None
 
 
-    def _load_node(self, dir_uuid, name):
-        stat_key = self._find_entry(dir_uuid, name)
+    def _load_node(self, stat_key):
         self.logger.info("load: " + stat_key)
         return stat_key, loads(self._latest_contents(stat_key))
 
@@ -133,7 +155,11 @@ class IrohFS(Fuse):
         self.logger.info("_walk_from_node: " + str(path))
 
         lookup_el = path.pop(0)
-        new_key, new_node = self._load_node(node.get('uuid'), lookup_el)
+        stat_key = self._find_entry(node.get('uuid'), lookup_el)
+        if not stat_key:
+            return None, None
+
+        new_key, new_node = self._load_node(stat_key)
 
         # We found what we're looking for!
         if len(path) == 0:
@@ -200,48 +226,71 @@ class IrohFS(Fuse):
             print(traceback.format_exc())
             return -errno.EIO
 
-    def mknod(self, path, mode, dev):
-        self.logger.info("mknod: " + path)
+    def _new_node(self, type, name):
+        if type not in ['file', 'dir']:
+            raise Exception("Unknown node type: " + type)
+        new_stat = IrohStat()
+        new_stat.st_mode = stat.S_IFREG | 0o644
+        new_stat.st_nlink = 1
+        return {
+            "type": type,
+            "stat": new_stat.to_dict(),
+            "uuid": str(uuid.uuid4())
+        }
+
+    def create(self, path, flags, mode):
+        self.logger.info("create: " + path)
 
         _, node_exists = self._walk(path)
         if node_exists:
             return -errno.EEXIST
 
-        data_uuid = str(uuid.uuid4())
         parent_path = os.path.dirname(path)
         name = os.path.basename(path)
         _, parent_node = self._walk(parent_path)
-        new_stat = IrohStat()
-        new_stat.st_mode = stat.S_IFREG | 0o644
-        new_stat.st_nlink = 1
-        new_file = {
-            "type": "file",
-            "stat": new_stat.to_dict(),
-            "data": data_uuid
-        }
+
+        new_file = self._new_node('file', name)
+
         try:
             self._persist(parent_node, name, new_file)
-            data_key = 'data:%s' % new_file.get('data')
+            data_key = self._data_key(new_file['uuid'])
             self.iroh_doc.set_bytes(self.iroh_author, data_key.encode('utf-8'), b'\x00')
             self._on_change()
+            return new_file
         except Exception as e:
-            # print(str(e))
             print(traceback.format_exc())
             return -errno.EIO
 
-    def open(self, path, flags):
+    def _real_path(self, node):
+        data_file = self._data_key(node.get('uuid'))
+        return os.path.join(self.state_dir, data_file)
+
+    def open(self, path, flags, *mode):
         self.logger.info("open: " + path)
-        key, node = self._walk(path)
-        return 'honk'
+        fh = {}
+        fh['key'], fh['node'] = self._walk(path)
+        if not fh['node']:
+            self.logger.info("open: " + path + ": no such file or directory")
+            return -errno.ENOENT
+        real_path = self._real_path(fh['node'])
+        fh['file'] = os.fdopen(os.open(real_path, flags, *mode), _flag2mode(flags))
+        fh['fd'] = fh['file'].fileno()
+        return fh
 
-    def create(self, path, flags, mode):
-        self.logger.info("create: " + path)
-        traceback.print_stack()
-        return 'honk'
-
-    def read(self, path, size, offset, fh):
+    def read(self, path, length, offset, fh):
         self.logger.info("read: " + path)
-        print(fh)
+
+        return os.pread(fh['fd'], length, offset)
+
+    def ftruncate(self, path, length, fh):
+        self.logger.info("ftruncate: " + path + "to" + str(length))
+
+    def truncate(self, path, length):
+        self.logger.info("truncate: " + path + "to" + str(length))
+        try:
+            _, node = self._walk(path)
+        except Exception as e:
+            return -errno.ENOENT
 
     def write(self, path, buf, offset, fh):
         self.logger.info("write: " + path + "@" + str(offset))
@@ -254,6 +303,10 @@ if __name__ == '__main__':
 
     xdg_data_home = os.environ.get('XDG_DATA_HOME', os.path.expanduser('~/.local/share'))
     iroh_data_dir = os.environ.get('IROH_DATA_DIR', os.path.join(xdg_data_home, 'iroh'))
+
+    xdg_state_home = os.environ.get('XDG_STATE_HOME', os.path.expanduser('~/.local/state'))
+    irohfs_state_dir = os.environ.get('IROHFS_STATE_DIR', os.path.join(xdg_data_home, 'irohfs'))
+    os.makedirs(os.path.join(irohfs_state_dir, 'data'))
 
     iroh_node = iroh.IrohNode(iroh_data_dir)
     print("Started Iroh node: {}".format(iroh_node.node_id()))
@@ -284,7 +337,7 @@ if __name__ == '__main__':
         version="%prog " + fuse.__version__,
         usage=usage,
         dash_s_do='setsingle',
-        doc=doc, author=author,
+        doc=doc, author=author, state_dir=irohfs_state_dir
     )
 
     server.parse(errex=1)
