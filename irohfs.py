@@ -67,8 +67,9 @@ class IrohFS(Fuse):
     def _on_change(self):
         self.logger.info("event: on_change")
 
-    def getattr(self, path):
+    def getattr(self, path, fh=None):
         self.logger.info("getattr: " + path)
+        print(fh)
         try:
             # self._sync(path)
             _, node = self._walk(path)
@@ -97,10 +98,21 @@ class IrohFS(Fuse):
         query = iroh.Query.key_exact(key.encode('utf-8'), None)
         return self.iroh_doc.get_one(query).content_bytes(self.iroh_doc)
 
+    # @TODO: Yeah, not quite right probably
+    def _find_entry(self, dir_uuid, name):
+        entry_key_prefix = "fs/%s/%s" % (dir_uuid, name)
+        query = iroh.Query.key_prefix(entry_key_prefix.encode('utf-8'), None)
+        # @TODO: This should be a get many that we filter
+        entry = self.iroh_doc.get_one(query)
+        elements = entry.key().decode('utf-8').split('/').removesuffix('.json')
+        stat_key = self._stat_key(elements[-1])
+        return stat_key
+
+
     def _load_node(self, dir_uuid, name):
-        key = "fs:%s:%s.json" % (dir_uuid, name)
-        self.logger.info("load: " + key)
-        return key, loads(self._latest_contents(key))
+        stat_key = self._find_entry(dir_uuid, name)
+        self.logger.info("load: " + stat_key)
+        return stat_key, loads(self._latest_contents(stat_key))
 
     def _dir_entries(self, node):
         children = self._list_children(node)
@@ -139,7 +151,7 @@ class IrohFS(Fuse):
             else:
                 return self._walk_from_node(self.root_node, path.removeprefix('/').split('/'))
         except Exception as e:
-            # print(traceback.format_exc())
+            print(traceback.format_exc())
             self.logger.info("_walk: " + path + ": file not found")
             return None, None
 
@@ -220,29 +232,20 @@ class IrohFS(Fuse):
     def open(self, path, flags):
         self.logger.info("open: " + path)
         key, node = self._walk(path)
-        return self.IrohFile(node, flags)
+        return 'honk'
 
     def create(self, path, flags, mode):
         self.logger.info("create: " + path)
         traceback.print_stack()
-        return self.IrohFile(None, flags)
+        return 'honk'
 
-    class IrohFile(object):
-        def __init__(self, node, flags):
-            print("----- OPENED FILE -----")
+    def read(self, path, size, offset, fh):
+        self.logger.info("read: " + path)
+        print(fh)
 
-        def read(self, length, offset):
-            print("---- OBJ READ ----")
-
-        def write(self, buf, offset):
-            print("---- OBJ WRITE ----")
-
-        def fgetattr(self):
-            print("---- OBJ STAT ----")
-
-        def ftruncate(self, length):
-            print("---- OBJ TRUNCATE ----")
-
+    def write(self, path, buf, offset, fh):
+        self.logger.info("write: " + path + "@" + str(offset))
+        print(fh)
 
 if __name__ == '__main__':
     usage = """
