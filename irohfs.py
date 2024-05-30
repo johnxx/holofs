@@ -1,4 +1,5 @@
 import errno, stat
+import functools
 import os
 import traceback
 import uuid
@@ -44,6 +45,32 @@ class IrohStat(fuse.Stat):
     def to_dict(self):
         return vars(self)
 
+class IrohFileHandle(object):
+    def __init__(self, key, node, real_path):
+        self.key = key
+        self.node = node
+        self.real_path = real_path
+
+        self.open_args = None
+        self.file = None
+        self.fd = None
+
+    def defer_open(self, *args):
+        self.open_args = args
+
+    def real_open(self):
+        self._refresh()
+        real_stat = os.stat(self.real_path)
+        if not real_stat:
+            return False
+        self.file = os.fdopen(os.open(*self.open_args), _flag2mode(self.open_args[1]))
+        self.fd = self.file.fileno()
+
+    def _refresh(self):
+        # @TODO: yeah, maybe this doesn't even go here. I'm tired
+        pass
+
+
 
 class IrohFS(Fuse):
     def __init__(self, *args, **kwargs):
@@ -78,14 +105,13 @@ class IrohFS(Fuse):
 
     def fgetattr(self, path, fh):
         self.logger.info("fgetattr: " + path)
-        node = fh['node']
-        if not node:
-            try:
-                self.logger.warning("fgetattr: called without fh!")
-                _, node = self._walk(path)
-            except Exception as e:
-                return -errno.ENOENT
-        return IrohStat(node.get('stat'))
+        # if not node:
+        #     try:
+        #         self.logger.warning("fgetattr: called without fh!")
+        #         _, node = self._walk(path)
+        #     except Exception as e:
+        #         return -errno.ENOENT
+        return IrohStat(fh.node.get('stat'))
 
 
     def getattr(self, path):
@@ -267,20 +293,22 @@ class IrohFS(Fuse):
 
     def open(self, path, flags, *mode):
         self.logger.info("open: " + path)
-        fh = {}
-        fh['key'], fh['node'] = self._walk(path)
-        if not fh['node']:
+        key, node = self._walk(path)
+        if not node:
             self.logger.info("open: " + path + ": no such file or directory")
             return -errno.ENOENT
-        real_path = self._real_path(fh['node'])
-        fh['file'] = os.fdopen(os.open(real_path, flags, *mode), _flag2mode(flags))
-        fh['fd'] = fh['file'].fileno()
+        real_path = self._real_path(node)
+        fh = IrohFileHandle(self.iroh_doc, self.iroh_author, key, node, real_path, flags, mode)
+        fh.defer_open(real_path, flags, mode)
         return fh
+
+    def _refresh_if_stale(self, node):
+        pass
 
     def read(self, path, length, offset, fh):
         self.logger.info("read: " + path)
 
-        return os.pread(fh['fd'], length, offset)
+        return os.pread(fh.fd, length, offset)
 
     def ftruncate(self, path, length, fh):
         self.logger.info("ftruncate: " + path + "to" + str(length))
