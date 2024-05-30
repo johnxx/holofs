@@ -45,31 +45,13 @@ class IrohStat(fuse.Stat):
     def to_dict(self):
         return vars(self)
 
+
 class IrohFileHandle(object):
-    def __init__(self, key, node, real_path):
+    def __init__(self, key, node, file):
         self.key = key
         self.node = node
-        self.real_path = real_path
-
-        self.open_args = None
-        self.file = None
-        self.fd = None
-
-    def defer_open(self, *args):
-        self.open_args = args
-
-    def real_open(self):
-        self._refresh()
-        real_stat = os.stat(self.real_path)
-        if not real_stat:
-            return False
-        self.file = os.fdopen(os.open(*self.open_args), _flag2mode(self.open_args[1]))
+        self.file = file
         self.fd = self.file.fileno()
-
-    def _refresh(self):
-        # @TODO: yeah, maybe this doesn't even go here. I'm tired
-        pass
-
 
 
 class IrohFS(Fuse):
@@ -146,7 +128,7 @@ class IrohFS(Fuse):
 
     # @TODO: Yeah, not quite right probably
     def _find_entry(self, dir_uuid, name):
-        entry_key_prefix = "fs/%s/%s" % (dir_uuid, name)
+        entry_key_prefix = "fs/%s/%s/" % (dir_uuid, name)
         query = iroh.Query.key_prefix(entry_key_prefix.encode('utf-8'), None)
         # @TODO: This should be a get many that we filter
         entry = self.iroh_doc.get_one(query)
@@ -291,38 +273,62 @@ class IrohFS(Fuse):
         data_file = self._data_key(node.get('uuid'))
         return os.path.join(self.state_dir, data_file)
 
-    def open(self, path, flags, *mode):
+    def open(self, path, flags):
         self.logger.info("open: " + path)
         key, node = self._walk(path)
         if not node:
             self.logger.info("open: " + path + ": no such file or directory")
             return -errno.ENOENT
         real_path = self._real_path(node)
-        fh = IrohFileHandle(self.iroh_doc, self.iroh_author, key, node, real_path, flags, mode)
-        fh.defer_open(real_path, flags, mode)
+        self._refresh_if_stale(node)
+        file = os.fdopen(os.open(real_path, flags))
+        fh = IrohFileHandle(key, node, file)
         return fh
 
+    def _refresh(self, node):
+        data_key = self._data_key(node.get('uuid'))
+        query = iroh.Query.key_exact(data_key.encode('utf-8'), None)
+        data_entry = self.iroh_doc.get_one(query)
+        real_path = self._real_path(node)
+        self.iroh_doc.export_file(data_entry, real_path, None)
+
     def _refresh_if_stale(self, node):
-        pass
+        # @TODO: This should conditionally refresh the local file only if needed
+        return self._refresh(node)
 
     def read(self, path, length, offset, fh):
         self.logger.info("read: " + path)
-
+        self._refresh_if_stale(fh.node)
         return os.pread(fh.fd, length, offset)
 
     def ftruncate(self, path, length, fh):
-        self.logger.info("ftruncate: " + path + "to" + str(length))
+        self.logger.info("ftruncate: " + path + " to" + str(length))
+        fh.file.truncate(length)
+        self._commit(fh.node)
 
     def truncate(self, path, length):
-        self.logger.info("truncate: " + path + "to" + str(length))
+        self.logger.info("truncate: " + path + " to" + str(length))
         try:
             _, node = self._walk(path)
         except Exception as e:
             return -errno.ENOENT
 
+    def _update(self, node):
+        stat_key = self._stat_key(node.get('uuid'))
+        self.iroh_doc.set_bytes(self.iroh_author, stat_key.encode('utf-8'), dumps(node).encode('utf-8'))
+
+    def _commit(self, node):
+        data_key = self._data_key(node.get('uuid'))
+        real_path = self._real_path(node)
+        self.iroh_doc.import_file(self.iroh_author, data_key.encode('utf-8'), real_path, True, None)
+        node.get('stat')['st_size'] = os.fstat(fh.fd).st_size
+        self._update(node)
+
     def write(self, path, buf, offset, fh):
-        self.logger.info("write: " + path + "@" + str(offset))
-        print(fh)
+        self.logger.info("write: " + path + " " + str(len(buf)) + "@" + str(offset))
+        res = os.pwrite(fh.fd, buf, offset)
+        self._commit(fh.node)
+        return res
 
 if __name__ == '__main__':
     usage = """
@@ -334,7 +340,7 @@ if __name__ == '__main__':
 
     xdg_state_home = os.environ.get('XDG_STATE_HOME', os.path.expanduser('~/.local/state'))
     irohfs_state_dir = os.environ.get('IROHFS_STATE_DIR', os.path.join(xdg_data_home, 'irohfs'))
-    os.makedirs(os.path.join(irohfs_state_dir, 'data'))
+    os.makedirs(os.path.join(irohfs_state_dir, 'data'), exist_ok=True)
 
     iroh_node = iroh.IrohNode(iroh_data_dir)
     print("Started Iroh node: {}".format(iroh_node.node_id()))
