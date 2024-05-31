@@ -1,6 +1,6 @@
 import errno, stat
-import functools
 import os
+import queue
 import traceback
 import uuid
 
@@ -67,6 +67,7 @@ class IrohFS(Fuse):
 
         self.logger = self._setup_logging(log_level)
         self.root_key, self.root_node = self._load_root()
+        self.iroh_doc.subscribe(self)
 
     def _setup_logging(self, log_level):
         logger = logging.getLogger('IrohFS')
@@ -77,6 +78,29 @@ class IrohFS(Fuse):
         console.setLevel(log_level)
         logger.addHandler(console)
         return logger
+
+    def event(self, e):
+        t = e.type()
+        if t == iroh.LiveEventType.INSERT_LOCAL:
+            entry = e.as_insert_local()
+            self.logger.info(f"LiveEvent - InsertLocal: entry hash {entry.content_hash().to_string()}")
+        elif t == iroh.LiveEventType.INSERT_REMOTE:
+            insert_remove_event = e.as_insert_remote()
+            self.logger.info(f"LiveEvent - InsertRemote:\n\tfrom: {insert_remove_event.from_}\n\tentry hash:\n\t{insert_remove_event.entry.content_hash().to_string()}\n\tcontent_status: {insert_remove_event.content_status}")
+        elif t == iroh.LiveEventType.CONTENT_READY:
+            hash_val = e.as_content_ready()
+            self.logger.info(f"LiveEvent - ContentReady: hash {hash_val.to_string()}")
+        elif t == iroh.LiveEventType.NEIGHBOR_UP:
+            node_id = e.as_neighbor_up()
+            self.logger.info(f"LiveEvent - NeighborUp: node id {node_id.to_string()}")
+        elif t == iroh.LiveEventType.NEIGHBOR_DOWN:
+            node_id = e.as_neighbor_down()
+            self.logger.info(f"LiveEvent - NeighborDown: node id {node_id.to_string()}")
+        elif t == iroh.LiveEventType.SYNC_FINISHED:
+            sync_event = e.as_sync_finished()
+            self.logger.info(f"Live Event - SyncFinished: synced peer: {sync_event.peer.to_string()}")
+        else:
+            raise Exception("unknown LiveEventType")
 
     def main(self, *args, **kwargs):
         self.logger.info("entered: Fuse.main()")
