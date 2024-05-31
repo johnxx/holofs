@@ -129,6 +129,7 @@ class IrohFS(Fuse):
     # @TODO: Yeah, not quite right probably
     def _find_entry(self, dir_uuid, name):
         entry_key_prefix = "fs/%s/%s/" % (dir_uuid, name)
+        self.logger.info("find_entry: " + entry_key_prefix)
         query = iroh.Query.key_prefix(entry_key_prefix.encode('utf-8'), None)
         # @TODO: This should be a get many that we filter
         entry = self.iroh_doc.get_one(query)
@@ -138,7 +139,6 @@ class IrohFS(Fuse):
             return stat_key
         else:
             return None
-
 
     def _load_node(self, stat_key):
         self.logger.info("load: " + stat_key)
@@ -246,7 +246,7 @@ class IrohFS(Fuse):
             "uuid": str(uuid.uuid4())
         }
 
-    def create(self, path, flags, mode):
+    def create(self, path, flags):
         self.logger.info("create: " + path)
 
         _, node_exists = self._walk(path)
@@ -261,6 +261,7 @@ class IrohFS(Fuse):
 
         try:
             self._persist(parent_node, name, new_file)
+            # @TODO: Ugh, we need to handle the fact that iroh values can't be empty
             data_key = self._data_key(new_file['uuid'])
             self.iroh_doc.set_bytes(self.iroh_author, data_key.encode('utf-8'), b'\x00')
             self._on_change()
@@ -303,6 +304,7 @@ class IrohFS(Fuse):
 
     def ftruncate(self, path, length, fh):
         self.logger.info("ftruncate: " + path + " to" + str(length))
+        self._refresh_if_stale(fh.node)
         fh.file.truncate(length)
         self._commit(fh.node)
 
@@ -310,6 +312,9 @@ class IrohFS(Fuse):
         self.logger.info("truncate: " + path + " to" + str(length))
         try:
             _, node = self._walk(path)
+            self._refresh_if_stale(node)
+            real_path = self._real_path(node)
+            os.truncate(real_path, length)
         except Exception as e:
             return -errno.ENOENT
 
@@ -321,7 +326,7 @@ class IrohFS(Fuse):
         data_key = self._data_key(node.get('uuid'))
         real_path = self._real_path(node)
         self.iroh_doc.import_file(self.iroh_author, data_key.encode('utf-8'), real_path, True, None)
-        node.get('stat')['st_size'] = os.fstat(fh.fd).st_size
+        node.get('stat')['st_size'] = os.stat(real_path).st_size
         self._update(node)
 
     def write(self, path, buf, offset, fh):
