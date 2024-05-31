@@ -399,9 +399,11 @@ if __name__ == '__main__':
     author = authors[0]
     print("Assumed author id: {}".format(author.to_string()))
 
-    doc_id = 'rschuirxucckrvvesyrgq5rqvlaskfwvmdgoekcbjdjlvem5k7wq'
+    doc_id = 'xzp6bjix3lbd7fw7u46s7qjclrqqn3xkj3yk5ipv76sfpa7zxlza'
     doc = iroh_node.doc_open(doc_id)
     print("Opened doc: {}".format(doc.id()))
+
+    print(doc.status())
 
     query = iroh.Query.key_exact(b'root.json', None)
     root_node = doc.get_one(query)
