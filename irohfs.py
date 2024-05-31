@@ -202,14 +202,6 @@ class IrohFS(Fuse):
         name = elements[2].removesuffix('.json')
         return fuse.Direntry(name)
 
-    def _persist(self, parent, name, node):
-        stat_key = self._stat_key(node.get('uuid'))
-        entry_key = self._entry_key(parent.get('uuid'), name, node.get('uuid'))
-        self.logger.info("dir entry: " + entry_key + " stat: " + stat_key)
-        self.iroh_doc.set_bytes(self.iroh_author, stat_key.encode('utf-8'), dumps(node).encode('utf-8'))
-        self.iroh_doc.set_bytes(self.iroh_author, entry_key.encode('utf-8'), b'\x00')
-        return stat_key, node
-
     def mkdir(self, path, mode):
         self.logger.info("mkdir: " + path)
 
@@ -261,9 +253,9 @@ class IrohFS(Fuse):
 
         try:
             key, node = self._persist(parent_node, name, new_file)
-            self._commit(node)
-            self._refresh_if_stale(node)
             real_path = self._real_path(node)
+            os.mknod(real_path, mode=0o600 | stat.S_IFREG)
+            self._commit(node)
             file = os.fdopen(os.open(real_path, flags))
             fh = IrohFileHandle(key, node, file)
             self._on_change()
@@ -303,6 +295,8 @@ class IrohFS(Fuse):
             data_key = self._data_key(node.get('uuid'))
             query = iroh.Query.key_exact(data_key.encode('utf-8'), None)
             data_entry = self.iroh_doc.get_one(query)
+            self.logger.info("export " + str(data_key) + " to " + real_path + " size=" + str(
+                node.get('stat').get('st_size')))
             self.iroh_doc.export_file(data_entry, real_path, None)
 
     def _refresh_if_stale(self, node):
@@ -330,6 +324,14 @@ class IrohFS(Fuse):
         except Exception as e:
             return -errno.ENOENT
 
+    def _persist(self, parent, name, node):
+        stat_key = self._stat_key(node.get('uuid'))
+        entry_key = self._entry_key(parent.get('uuid'), name, node.get('uuid'))
+        self.logger.info("dir entry: " + entry_key + " stat: " + stat_key)
+        self.iroh_doc.set_bytes(self.iroh_author, stat_key.encode('utf-8'), dumps(node).encode('utf-8'))
+        self.iroh_doc.set_bytes(self.iroh_author, entry_key.encode('utf-8'), b'\x00')
+        return stat_key, node
+
     def _update(self, node):
         stat_key = self._stat_key(node.get('uuid'))
         self.iroh_doc.set_bytes(self.iroh_author, stat_key.encode('utf-8'), dumps(node).encode('utf-8'))
@@ -338,11 +340,13 @@ class IrohFS(Fuse):
         data_key = self._data_key(node.get('uuid'))
         real_path = self._real_path(node)
         real_stat = os.stat(real_path)
-        if real_stat.st_size == 0:
-            self.iroh_doc.delete(self.iroh_author, data_key.encode('utf-8'))
+        data_entry = self.iroh_doc.get_one(iroh.Query.key_exact(data_key.encode('utf-8'), None))
+        real_size = real_stat.st_size
+        if data_entry and real_size == 0:
+            self.iroh_doc._del(self.iroh_author, data_key.encode('utf-8'))
         else:
             self.iroh_doc.import_file(self.iroh_author, data_key.encode('utf-8'), real_path, True, None)
-        node.get('stat')['st_size'] = os.stat(real_path).st_size
+        node['stat']['st_size'] = os.stat(real_path).st_size
         self._update(node)
 
     def write(self, path, buf, offset, fh):
