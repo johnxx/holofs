@@ -126,7 +126,6 @@ class IrohFS(Fuse):
         query = iroh.Query.key_exact(key.encode('utf-8'), None)
         return self.iroh_doc.get_one(query).content_bytes(self.iroh_doc)
 
-    # @TODO: Yeah, not quite right probably
     def _find_entry(self, dir_uuid, name):
         entry_key_prefix = "fs/%s/%s/" % (dir_uuid, name)
         self.logger.info("find_entry: " + entry_key_prefix)
@@ -155,7 +154,7 @@ class IrohFS(Fuse):
         return entries
 
     def _list_children(self, node):
-        prefix = "fs:%s:" % node.get('uuid')
+        prefix = "fs/%s/" % node.get('uuid')
         query = iroh.Query.key_prefix(prefix.encode('utf-8'), None)
         return self.iroh_doc.get_many(query)
 
@@ -193,7 +192,7 @@ class IrohFS(Fuse):
         return "stat/%s.json" % node_uuid
 
     def _data_key(self, node_uuid):
-        return "data/%s.json" % node_uuid
+        return "data/%s" % node_uuid
 
     def _entry_key(self, parent_uuid, name, node_uuid):
         return "fs/%s/%s/%s.json" % (parent_uuid, name, node_uuid)
@@ -209,6 +208,7 @@ class IrohFS(Fuse):
         self.logger.info("dir entry: " + entry_key + " stat: " + stat_key)
         self.iroh_doc.set_bytes(self.iroh_author, stat_key.encode('utf-8'), dumps(node).encode('utf-8'))
         self.iroh_doc.set_bytes(self.iroh_author, entry_key.encode('utf-8'), b'\x00')
+        return stat_key, node
 
     def mkdir(self, path, mode):
         self.logger.info("mkdir: " + path)
@@ -246,7 +246,7 @@ class IrohFS(Fuse):
             "uuid": str(uuid.uuid4())
         }
 
-    def create(self, path, flags):
+    def create(self, path, flags, mode):
         self.logger.info("create: " + path)
 
         _, node_exists = self._walk(path)
@@ -260,12 +260,14 @@ class IrohFS(Fuse):
         new_file = self._new_node('file', name)
 
         try:
-            self._persist(parent_node, name, new_file)
-            # @TODO: Ugh, we need to handle the fact that iroh values can't be empty
-            data_key = self._data_key(new_file['uuid'])
-            self.iroh_doc.set_bytes(self.iroh_author, data_key.encode('utf-8'), b'\x00')
+            key, node = self._persist(parent_node, name, new_file)
+            self._commit(node)
+            self._refresh_if_stale(node)
+            real_path = self._real_path(node)
+            file = os.fdopen(os.open(real_path, flags))
+            fh = IrohFileHandle(key, node, file)
             self._on_change()
-            return new_file
+            return fh
         except Exception as e:
             print(traceback.format_exc())
             return -errno.EIO
@@ -287,11 +289,21 @@ class IrohFS(Fuse):
         return fh
 
     def _refresh(self, node):
-        data_key = self._data_key(node.get('uuid'))
-        query = iroh.Query.key_exact(data_key.encode('utf-8'), None)
-        data_entry = self.iroh_doc.get_one(query)
         real_path = self._real_path(node)
-        self.iroh_doc.export_file(data_entry, real_path, None)
+
+        # @TODO: This is where we should check that the existing file matches the type of the node.stat
+        try:
+            os.mknod(real_path, mode=0o600 | stat.S_IFREG)
+        except FileExistsError:
+            pass
+
+        if node.get('stat').get('st_size') == 0:
+            os.truncate(real_path, 0)
+        else:
+            data_key = self._data_key(node.get('uuid'))
+            query = iroh.Query.key_exact(data_key.encode('utf-8'), None)
+            data_entry = self.iroh_doc.get_one(query)
+            self.iroh_doc.export_file(data_entry, real_path, None)
 
     def _refresh_if_stale(self, node):
         # @TODO: This should conditionally refresh the local file only if needed
@@ -325,7 +337,11 @@ class IrohFS(Fuse):
     def _commit(self, node):
         data_key = self._data_key(node.get('uuid'))
         real_path = self._real_path(node)
-        self.iroh_doc.import_file(self.iroh_author, data_key.encode('utf-8'), real_path, True, None)
+        real_stat = os.stat(real_path)
+        if real_stat.st_size == 0:
+            self.iroh_doc.delete(self.iroh_author, data_key.encode('utf-8'))
+        else:
+            self.iroh_doc.import_file(self.iroh_author, data_key.encode('utf-8'), real_path, True, None)
         node.get('stat')['st_size'] = os.stat(real_path).st_size
         self._update(node)
 
@@ -334,6 +350,7 @@ class IrohFS(Fuse):
         res = os.pwrite(fh.fd, buf, offset)
         self._commit(fh.node)
         return res
+
 
 if __name__ == '__main__':
     usage = """
@@ -344,7 +361,7 @@ if __name__ == '__main__':
     iroh_data_dir = os.environ.get('IROH_DATA_DIR', os.path.join(xdg_data_home, 'iroh'))
 
     xdg_state_home = os.environ.get('XDG_STATE_HOME', os.path.expanduser('~/.local/state'))
-    irohfs_state_dir = os.environ.get('IROHFS_STATE_DIR', os.path.join(xdg_data_home, 'irohfs'))
+    irohfs_state_dir = os.environ.get('IROHFS_STATE_DIR', os.path.join(xdg_state_home, 'irohfs'))
     os.makedirs(os.path.join(irohfs_state_dir, 'data'), exist_ok=True)
 
     iroh_node = iroh.IrohNode(iroh_data_dir)
