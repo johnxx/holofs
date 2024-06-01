@@ -56,9 +56,11 @@ class IrohFileHandle(object):
 
 class IrohFS(Fuse):
     def __init__(self, *args, **kwargs):
-        self.iroh_doc = kwargs.pop('doc')
-        self.iroh_author = kwargs.pop('author')
         self.state_dir = kwargs.pop('state_dir')
+
+        self.iroh_node = None
+        self.author = None
+        self.doc = None
 
         super(IrohFS, self).__init__(*args, **kwargs)
 
@@ -68,7 +70,6 @@ class IrohFS(Fuse):
 
         self.logger = self._setup_logging(log_level)
         self.root_key, self.root_node = self._load_root()
-        self.iroh_doc.subscribe(self)
 
     def _setup_logging(self, log_level):
         logger = logging.getLogger('IrohFS')
@@ -104,6 +105,10 @@ class IrohFS(Fuse):
             raise Exception("unknown LiveEventType")
 
     def main(self, *args, **kwargs):
+        self.node = kwargs.pop('node')
+        self.author = kwargs.pop('author')
+        self.iroh_doc = kwargs.pop('iroh_doc')
+        self.iroh_doc.subscribe(self)
         self.logger.info("entered: Fuse.main()")
         return Fuse.main(self, *args, **kwargs)
 
@@ -405,29 +410,53 @@ if __name__ == '__main__':
 
     xdg_state_home = os.environ.get('XDG_STATE_HOME', os.path.expanduser('~/.local/state'))
     irohfs_state_dir = os.environ.get('IROHFS_STATE_DIR', os.path.join(xdg_state_home, 'irohfs'))
+
+    server = IrohFS(
+        version="%prog " + fuse.__version__,
+        usage=usage,
+        dash_s_do='setsingle',
+        state_dir=irohfs_state_dir
+    )
+
+    server.parser.add_option('--author', dest='author_id', help='Set Iroh Author ID')
+    server.parser.add_option('--create', dest='create', action='store_true', help='Create Iroh Doc if it does not exist')
+    server.parser.add_option('--doc', dest='doc_id', help='Specify Doc ID to open')
+    server.parser.add_option('--share', dest='share', action='store_true', help='Print shareable ticket')
+    server.parser.add_option('--join', dest='ticket_id', help='Join Iroh Doc from shareable ticket')
+
+    server.parse(errex=1)
+
+    author_id = server.options.author
+    create = server.options.create
+    doc_id = server.options.doc_id
+    share = server.options.share
+    ticket_id = server.options.ticket_id
+
     os.makedirs(os.path.join(irohfs_state_dir, 'data'), exist_ok=True)
 
     iroh_node = iroh.IrohNode(iroh_data_dir)
     print("Started Iroh node: {}".format(iroh_node.node_id()))
 
-    authors = iroh_node.author_list()
-    author = authors[0]
+    if author_id:
+        author = iroh.AuthorId.from_string(author_id)
+    else:
+        authors = iroh_node.author_list()
+        author = authors[0]
     print("Assumed author id: {}".format(author.to_string()))
 
-    # Cerea Doc ID
-    # doc_id = 'xzp6bjix3lbd7fw7u46s7qjclrqqn3xkj3yk5ipv76sfpa7zxlza'
-    # doc = iroh_node.doc_open(doc_id)
-    # print("Opened doc: {}".format(doc.id()))
-
-    # Schala's ticket for Cerea's Doc
-    ticket_id = 'docaaacaaq53ukol6zkyo5rpnu656dgpfu7vkqatv3ijtceo4cwas25kuzhahu3zcuuqbiscdyk5mdoz7witfe5q5r6ctyqjmpcvy4ypkz23blrkaaa'
-    doc = iroh_node.doc_join(ticket_id)
-    print("Opened doc: {}".format(doc.id()))
+    if ticket_id:
+        doc = iroh_node.doc_join(ticket_id)
+        print("Joined doc: {}".format(doc.id()))
+    else:
+        if not doc_id:
+            doc = iroh_node.doc_create()
+            print("Created doc: {}".format(doc.id()))
+        else:
+            doc = iroh_node.doc_open(doc_id)
+            print("Opened doc: {}".format(doc.id()))
 
     dl_pol = doc.get_download_policy()
     doc.set_download_policy(dl_pol.everything())
-
-    print(doc.status())
 
     query = iroh.Query.key_exact(b'root.json', None)
     root_node = doc.get_one(query)
@@ -443,12 +472,5 @@ if __name__ == '__main__':
         }
         doc.set_bytes(author,  b'root.json', dumps(newfs).encode('utf-8'))
 
-    server = IrohFS(
-        version="%prog " + fuse.__version__,
-        usage=usage,
-        dash_s_do='setsingle',
-        doc=doc, author=author, state_dir=irohfs_state_dir
-    )
 
-    server.parse(errex=1)
-    server.main()
+    server.main(doc=doc, author=author, iroh_node=iroh_node)
