@@ -108,6 +108,7 @@ class IrohFS(Fuse):
 
     def _on_change(self):
         self.logger.info("event: on_change")
+        self.iroh_doc.start_sync()
 
     def fgetattr(self, path, fh):
         self.logger.info("fgetattr: " + path)
@@ -371,6 +372,7 @@ class IrohFS(Fuse):
         else:
             self.iroh_doc.import_file(self.iroh_author, data_key.encode('utf-8'), real_path, True, None)
         node['stat']['st_size'] = os.stat(real_path).st_size
+        self._on_change()
         self._update(node)
 
     def write(self, path, buf, offset, fh):
@@ -399,8 +401,14 @@ if __name__ == '__main__':
     author = authors[0]
     print("Assumed author id: {}".format(author.to_string()))
 
-    doc_id = 'xzp6bjix3lbd7fw7u46s7qjclrqqn3xkj3yk5ipv76sfpa7zxlza'
-    doc = iroh_node.doc_open(doc_id)
+    # Cerea Doc ID
+    # doc_id = 'xzp6bjix3lbd7fw7u46s7qjclrqqn3xkj3yk5ipv76sfpa7zxlza'
+    # doc = iroh_node.doc_open(doc_id)
+    # print("Opened doc: {}".format(doc.id()))
+
+    # Schala's ticket for Cerea's Doc
+    ticket_id = 'docaaacaaq53ukol6zkyo5rpnu656dgpfu7vkqatv3ijtceo4cwas25kuzhahu3zcuuqbiscdyk5mdoz7witfe5q5r6ctyqjmpcvy4ypkz23blrkaaa'
+    doc = iroh_node.doc_join(ticket_id)
     print("Opened doc: {}".format(doc.id()))
 
     print(doc.status())
