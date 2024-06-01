@@ -63,7 +63,8 @@ class IrohFS(Fuse):
         super(IrohFS, self).__init__(*args, **kwargs)
 
         # Debug logging
-        log_level = logging.INFO
+        log_level = logging.DEBUG
+        # log_level = logging.INFO
 
         self.logger = self._setup_logging(log_level)
         self.root_key, self.root_node = self._load_root()
@@ -86,7 +87,7 @@ class IrohFS(Fuse):
             self.logger.info(f"LiveEvent - InsertLocal: entry hash {entry.content_hash().to_string()}")
         elif t == iroh.LiveEventType.INSERT_REMOTE:
             insert_remove_event = e.as_insert_remote()
-            self.logger.info(f"LiveEvent - InsertRemote:\n\tfrom: {insert_remove_event.from_}\n\tentry hash:\n\t{insert_remove_event.entry.content_hash().to_string()}\n\tcontent_status: {insert_remove_event.content_status}")
+            self.logger.info(f"LiveEvent - InsertRemote:\n\tfrom: {insert_remove_event._from}\n\tentry hash:\n\t{insert_remove_event.entry.content_hash().to_string()}\n\tcontent_status: {insert_remove_event.content_status}")
         elif t == iroh.LiveEventType.CONTENT_READY:
             hash_val = e.as_content_ready()
             self.logger.info(f"LiveEvent - ContentReady: hash {hash_val.to_string()}")
@@ -108,7 +109,6 @@ class IrohFS(Fuse):
 
     def _on_change(self):
         self.logger.info("event: on_change")
-        self.iroh_doc.start_sync()
 
     def fgetattr(self, path, fh):
         self.logger.info("fgetattr: " + path)
@@ -308,6 +308,19 @@ class IrohFS(Fuse):
     def _refresh(self, node):
         real_path = self._real_path(node)
 
+        # @TODO: Do we need to manually sync every time here?
+        conns = iroh_node.connections()
+        node_addrs = []
+        node_ids = []
+        for conn in conns:
+            addrs = []
+            for addr in conn.addrs:
+                addrs.append(addr.addr())
+            node_addrs.append(iroh.NodeAddr(node_id=conn.node_id, relay_url=conn.relay_url, addresses=addrs))
+            node_ids.append(conn.node_id)
+        self.logger.debug("open connections: " + str(node_ids))
+        self.iroh_doc.start_sync(node_addrs)
+
         # @TODO: This is where we should check that the existing file matches the type of the node.stat
         try:
             os.mknod(real_path, mode=0o600 | stat.S_IFREG)
@@ -410,6 +423,9 @@ if __name__ == '__main__':
     ticket_id = 'docaaacaaq53ukol6zkyo5rpnu656dgpfu7vkqatv3ijtceo4cwas25kuzhahu3zcuuqbiscdyk5mdoz7witfe5q5r6ctyqjmpcvy4ypkz23blrkaaa'
     doc = iroh_node.doc_join(ticket_id)
     print("Opened doc: {}".format(doc.id()))
+
+    dl_pol = doc.get_download_policy()
+    doc.set_download_policy(dl_pol.everything())
 
     print(doc.status())
 
