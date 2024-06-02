@@ -370,9 +370,10 @@ class IrohFS(Fuse):
     def _refresh_if_stale(self, node):
         # @TODO: This should conditionally refresh the local file only if needed
         # RIght now I'm thinking we should compare mtime of the "real" file and the mtime of the iroh stat entry
-        current_time = time.monotonic()
-        if current_time > self.last_refresh + self.refresh_interval:
-            return self._refresh(node)
+        # current_time = time.monotonic()
+        # if current_time > self.last_refresh + self.refresh_interval:
+        #     return self._refresh(node)
+        return self._refresh(node)
 
     def read(self, path, length, offset, fh):
         self.logger.info("read: " + path)
