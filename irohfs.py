@@ -364,7 +364,7 @@ class IrohFS(Fuse):
                 sort_by=iroh.SortBy(iroh.SortBy.AUTHOR_KEY),
                 direction=iroh.SortDirection(iroh.SortDirection.DESC),
                 offset=0, limit=0)
-            query = iroh.Query.key_exact(data_key.encode('utf-8', query_opts), None)
+            query = iroh.Query.key_exact(data_key.encode('utf-8'), query_optsone)
             data_entry = self.iroh_doc.get_one(query)
             self.logger.info("export " + str(data_key) + " to " + real_path + " size=" + str(
                 node.get('stat').get('st_size')))
