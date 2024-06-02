@@ -59,8 +59,8 @@ class IrohFS(Fuse):
         self.state_dir = kwargs.pop('state_dir')
 
         self.iroh_node = None
-        self.author = None
-        self.doc = None
+        self.iroh_author = None
+        self.iroh_doc = None
 
         self.root_key = None
         self.root_node = None
@@ -109,11 +109,14 @@ class IrohFS(Fuse):
             raise Exception("unknown LiveEventType")
 
     def main(self, *args, **kwargs):
-        self.iroh_node = kwargs.pop('node')
-        self.author = kwargs.pop('author')
-        self.doc = kwargs.pop('iroh_doc')
-        self.root_key, self.root_node = self._load_root()
+        self.iroh_node = kwargs.pop('iroh_node')
+        self.iroh_author = kwargs.pop('author')
+        self.iroh_doc = kwargs.pop('doc')
+
         self.iroh_doc.subscribe(self)
+
+        self.root_key, self.root_node = self._load_root()
+
         self.logger.info("entered: Fuse.main()")
         return Fuse.main(self, *args, **kwargs)
 
@@ -434,13 +437,14 @@ if __name__ == '__main__':
     server.parser.add_option('--join', dest='ticket_id', action="store", type="string",
                              help='Join Iroh Doc from shareable ticket', default='')
 
-    server.parse(values=server, errex=1)
+    server.parse(errex=1)
+    options = server.cmdline[0]
 
-    author_id = server.author_id
-    create = server.create
-    doc_id = server.get("doc_id", None)
-    share = server.share
-    ticket_id = server.get("ticket_id", None)
+    author_id = options.author_id
+    create = options.create
+    doc_id = options.doc_id
+    share = options.share
+    ticket_id = options.ticket_id
 
     os.makedirs(os.path.join(irohfs_state_dir, 'data'), exist_ok=True)
 
@@ -466,6 +470,11 @@ if __name__ == '__main__':
             print("Opened doc: {}".format(doc.id()))
         else:
             raise Exception("No Doc ID specified. Did you mean to create one with --create?")
+
+    if share:
+        shareable_ticket_id = doc.share(iroh.ShareMode.WRITE)
+        print("You can share write access to the document with the following ticket:")
+        print("  " + shareable_ticket_id)
 
     dl_pol = doc.get_download_policy()
     doc.set_download_policy(dl_pol.everything())
