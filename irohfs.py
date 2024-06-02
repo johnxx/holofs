@@ -360,7 +360,9 @@ class IrohFS(Fuse):
             os.truncate(real_path, 0)
         else:
             data_key = self._data_key(node.get('uuid'))
-            query = iroh.Query.key_exact(data_key.encode('utf-8'), None)
+            sort_dir = iroh.SortDirection(iroh.SortDirection.DESC)
+            query_opts = iroh.QueryOptions(direction=sort_dir)
+            query = iroh.Query.key_exact(data_key.encode('utf-8', query_opts), None)
             data_entry = self.iroh_doc.get_one(query)
             self.logger.info("export " + str(data_key) + " to " + real_path + " size=" + str(
                 node.get('stat').get('st_size')))
