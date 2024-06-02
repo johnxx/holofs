@@ -62,6 +62,11 @@ class IrohFS(Fuse):
         self.author = None
         self.doc = None
 
+        self.root_key = None
+        self.root_node = None
+
+        self.options = None
+
         super(IrohFS, self).__init__(*args, **kwargs)
 
         # Debug logging
@@ -69,7 +74,6 @@ class IrohFS(Fuse):
         # log_level = logging.INFO
 
         self.logger = self._setup_logging(log_level)
-        self.root_key, self.root_node = self._load_root()
 
     def _setup_logging(self, log_level):
         logger = logging.getLogger('IrohFS')
@@ -105,9 +109,10 @@ class IrohFS(Fuse):
             raise Exception("unknown LiveEventType")
 
     def main(self, *args, **kwargs):
-        self.node = kwargs.pop('node')
+        self.iroh_node = kwargs.pop('node')
         self.author = kwargs.pop('author')
-        self.iroh_doc = kwargs.pop('iroh_doc')
+        self.doc = kwargs.pop('iroh_doc')
+        self.root_key, self.root_node = self._load_root()
         self.iroh_doc.subscribe(self)
         self.logger.info("entered: Fuse.main()")
         return Fuse.main(self, *args, **kwargs)
@@ -418,19 +423,24 @@ if __name__ == '__main__':
         state_dir=irohfs_state_dir
     )
 
-    server.parser.add_option('--author', dest='author_id', help='Set Iroh Author ID')
-    server.parser.add_option('--create', dest='create', action='store_true', help='Create Iroh Doc if it does not exist')
-    server.parser.add_option('--doc', dest='doc_id', help='Specify Doc ID to open')
-    server.parser.add_option('--share', dest='share', action='store_true', help='Print shareable ticket')
-    server.parser.add_option('--join', dest='ticket_id', help='Join Iroh Doc from shareable ticket')
+    server.parser.add_option('--author', dest='author_id', action="store", type="string",
+                             help='Set Iroh Author ID', default='')
+    server.parser.add_option('--create', dest='create', action='store_true',
+                             help='Create Iroh Doc if it does not exist', default=False)
+    server.parser.add_option('--doc', dest='doc_id', action="store", type="string",
+                             help='Specify Doc ID to open', default='')
+    server.parser.add_option('--share', dest='share', action='store_true',
+                             help='Print shareable ticket', default=False)
+    server.parser.add_option('--join', dest='ticket_id', action="store", type="string",
+                             help='Join Iroh Doc from shareable ticket', default='')
 
-    server.parse(errex=1)
+    server.parse(values=server, errex=1)
 
-    author_id = server.options.author
-    create = server.options.create
-    doc_id = server.options.doc_id
-    share = server.options.share
-    ticket_id = server.options.ticket_id
+    author_id = server.author_id
+    create = server.create
+    doc_id = server.get("doc_id", None)
+    share = server.share
+    ticket_id = server.get("ticket_id", None)
 
     os.makedirs(os.path.join(irohfs_state_dir, 'data'), exist_ok=True)
 
@@ -448,12 +458,14 @@ if __name__ == '__main__':
         doc = iroh_node.doc_join(ticket_id)
         print("Joined doc: {}".format(doc.id()))
     else:
-        if not doc_id:
+        if not doc_id and create:
             doc = iroh_node.doc_create()
             print("Created doc: {}".format(doc.id()))
-        else:
+        elif doc_id:
             doc = iroh_node.doc_open(doc_id)
             print("Opened doc: {}".format(doc.id()))
+        else:
+            raise Exception("No Doc ID specified. Did you mean to create one with --create?")
 
     dl_pol = doc.get_download_policy()
     doc.set_download_policy(dl_pol.everything())
@@ -471,6 +483,5 @@ if __name__ == '__main__':
             'uuid': str(uuid.uuid4())
         }
         doc.set_bytes(author,  b'root.json', dumps(newfs).encode('utf-8'))
-
 
     server.main(doc=doc, author=author, iroh_node=iroh_node)
