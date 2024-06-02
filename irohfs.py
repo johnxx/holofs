@@ -1,6 +1,7 @@
 import errno, stat
 import os
 import queue
+import time
 import traceback
 import uuid
 
@@ -65,7 +66,11 @@ class IrohFS(Fuse):
         self.root_key = None
         self.root_node = None
 
-        self.options = None
+        self.last_refresh = 0
+        self.last_resync = 0
+
+        self.resync_interval = 3
+        self.refresh_interval = 3
 
         super(IrohFS, self).__init__(*args, **kwargs)
 
@@ -116,6 +121,7 @@ class IrohFS(Fuse):
         self.iroh_doc.subscribe(self)
 
         self.root_key, self.root_node = self._load_root()
+        self._resync()
 
         self.logger.info("entered: Fuse.main()")
         return Fuse.main(self, *args, **kwargs)
@@ -125,6 +131,7 @@ class IrohFS(Fuse):
 
     def fgetattr(self, path, fh):
         self.logger.info("fgetattr: " + path)
+        self._resync_if_stale()
         # if not node:
         #     try:
         #         self.logger.warning("fgetattr: called without fh!")
@@ -136,6 +143,7 @@ class IrohFS(Fuse):
 
     def getattr(self, path):
         self.logger.info("getattr: " + path)
+        self._resync_if_stale()
         try:
             _, node = self._walk(path)
             st = IrohStat(node.get('stat'))
@@ -146,6 +154,7 @@ class IrohFS(Fuse):
 
     def readdir(self, path, offset):
         self.logger.info("readdir: " + path)
+        self._resync_if_stale()
         _, node = self._walk(path)
         return self._dir_entries(node)
 
@@ -318,21 +327,28 @@ class IrohFS(Fuse):
         fh = IrohFileHandle(key, node, file)
         return fh
 
-    def _refresh(self, node):
-        real_path = self._real_path(node)
+    def _resync_if_stale(self):
+        current_time = time.monotonic()
+        if current_time > self.last_resync + self.resync_interval:
+            self._resync()
 
-        # @TODO: Do we need to manually sync every time here?
+    def _resync(self):
         conns = iroh_node.connections()
         node_addrs = []
-        node_ids = []
+        self.logger.debug("open connections: ")
         for conn in conns:
             addrs = []
             for addr in conn.addrs:
                 addrs.append(addr.addr())
             node_addrs.append(iroh.NodeAddr(node_id=conn.node_id, relay_url=conn.relay_url, addresses=addrs))
-            node_ids.append(conn.node_id)
-        self.logger.debug("open connections: " + str(node_ids))
+            self.logger.debug("     " + conn.node_id.fmt_short())
         self.iroh_doc.start_sync(node_addrs)
+        self.last_resync = time.monotonic()
+
+    def _refresh(self, node):
+        real_path = self._real_path(node)
+
+        self._resync_if_stale()
 
         # @TODO: This is where we should check that the existing file matches the type of the node.stat
         try:
@@ -349,10 +365,14 @@ class IrohFS(Fuse):
             self.logger.info("export " + str(data_key) + " to " + real_path + " size=" + str(
                 node.get('stat').get('st_size')))
             self.iroh_doc.export_file(data_entry, real_path, None)
+        self.last_refresh = time.monotonic()
 
     def _refresh_if_stale(self, node):
         # @TODO: This should conditionally refresh the local file only if needed
-        return self._refresh(node)
+        # RIght now I'm thinking we should compare mtime of the "real" file and the mtime of the iroh stat entry
+        current_time = time.monotonic()
+        if current_time > self.last_refresh + self.refresh_interval:
+            return self._refresh(node)
 
     def read(self, path, length, offset, fh):
         self.logger.info("read: " + path)
