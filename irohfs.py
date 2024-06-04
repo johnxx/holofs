@@ -110,7 +110,10 @@ class IrohFS(Fuse):
         elif t == iroh.LiveEventType.SYNC_FINISHED:
             sync_event = e.as_sync_finished()
             self.logger.info(f"Live Event - SyncFinished: synced peer: {sync_event.peer.to_string()}")
+        elif t == iroh.LiveEventType.PENDING_CONTENT_READY:
+            self.logger.info("Pending content ready!")
         else:
+            print(t)
             raise Exception("unknown LiveEventType")
 
     def iroh_init(self, iroh_node, author, doc):
@@ -132,6 +135,8 @@ class IrohFS(Fuse):
             except Exception as e:
                 self._resync()
                 print("Trying %s more times to load the filesystem" % (max_retries - retries))
+            time.sleep(3)
+            retries += 1
         else:
             raise Exception("failed to load the filesystem")
 
@@ -142,32 +147,18 @@ class IrohFS(Fuse):
 
     def _latest_prefix_many(self, prefix):
         self.logger.info("query latest entries matching prefix: %s" % prefix)
-        # @TODO: The right thing
-        # query = iroh.Query.key_prefix(prefix.encode('utf-8'), None)
-        # return self.iroh_doc.get_many(query)
-        query = iroh.Query.key_exact(prefix.encode('utf-8'), None).single_latest_per_key(None)
+        query = iroh.Query.single_latest_per_key_prefix(prefix.encode('utf-8'), None)
         return self.iroh_doc.get_many(query)
 
     def _latest_prefix_one(self, prefix):
-        self.logger.info("query latest one entry matching prefix: %s" % prefix)
-        # @TODO: The right thing
-        # query = iroh.Query.key_prefix(prefix.encode('utf-8'), None)
-        # return self.iroh_doc.get_one(query)
-        query = iroh.Query.key_prefix(prefix.encode('utf-8'), None).single_latest_per_key(None)
+        self.logger.debug("query latest one entry matching prefix: %s" % prefix)
+        query = iroh.Query.single_latest_per_key_prefix(prefix.encode('utf-8'), None)
         return self.iroh_doc.get_one(query)
 
     def _latest_key_one(self, key):
-        self.logger.info("query latest entry for key: %s" % key)
-        # @TODO: The right thing
-        # query = iroh.Query.key_exact(key.encode('utf-8'))
-        # return self.iroh_doc.get_one(query)
-        # query = iroh.Query.key_exact(key.encode('utf-8'), None).single_latest_per_key(None)
-        print(key.encode('utf-8'))
-        # query = iroh.Query.key_exact(key.encode('utf-8'), None).single_latest_per_key(None)
-        query = iroh.Query.key_exact(key.encode('utf-8'), None)
-        res = self.iroh_doc.get_one(query)
-        print(str(res))
-        return res
+        self.logger.debug("query latest entry for key: %s" % key)
+        query = iroh.Query.single_latest_per_key_exact(key.encode('utf-8'))
+        return self.iroh_doc.get_one(query)
 
     def _on_change(self):
         self.logger.info("event: on_change")
@@ -215,7 +206,7 @@ class IrohFS(Fuse):
     def _latest_contents(self, key):
         # query = iroh.Query.key_exact(key.encode('utf-8'), None)
         # return self.iroh_doc.get_one(query).content_bytes(self.iroh_doc)
-        return loads(self._latest_key_one(key).content_bytes(self.iroh_doc))
+        return self._latest_key_one(key).content_bytes(self.iroh_doc)
 
     def _find_entry(self, dir_uuid, name):
         entry_key_prefix = "fs/%s/%s/" % (dir_uuid, name)
@@ -545,7 +536,7 @@ if __name__ == '__main__':
             raise Exception("No Doc ID specified. Did you mean to create one with --create?")
 
     if share:
-        shareable_ticket_id = doc.share(iroh.ShareMode.WRITE)
+        shareable_ticket_id = doc.share(iroh.ShareMode.WRITE, iroh.AddrInfoOptions.RELAY_AND_ADDRESSES)
         print("You can share write access to the document with the following ticket:")
         print("  " + shareable_ticket_id)
 
