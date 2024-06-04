@@ -434,11 +434,11 @@ class IrohFS(Fuse):
         return self._refresh(node)
 
     def read(self, path, length, offset, fh):
-        self.logger.info("read: " + path)
+        self.logger.info(f"read: {path} ({length}@{offset}")
         real_path = self._real_path(fh.node)
         fh.file.close()
         self._refresh_if_stale(fh.node)
-        fh.file = os.fdopen(os.open(real_path, 'r'))
+        fh.file = os.fdopen(os.open(real_path, os.O_RDONLY))
         fh.fd = fh.file.fileno()
         return os.pread(fh.fd, length, offset)
 
