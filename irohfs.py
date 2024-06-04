@@ -77,8 +77,9 @@ class IrohFS(Fuse):
         # Debug logging
         log_level = logging.DEBUG
         # log_level = logging.INFO
-
         self.logger = self._setup_logging(log_level)
+
+        self.queue = queue.Queue()
 
     def _setup_logging(self, log_level):
         logger = logging.getLogger('IrohFS')
@@ -140,7 +141,6 @@ class IrohFS(Fuse):
         else:
             raise Exception("failed to load the filesystem")
 
-
     def main(self, *args, **kwargs):
         self.logger.info("entered: Fuse.main()")
         return Fuse.main(self, *args, **kwargs)
@@ -159,6 +159,21 @@ class IrohFS(Fuse):
         self.logger.debug("query latest entry for key: %s" % key)
         query = iroh.Query.single_latest_per_key_exact(key.encode('utf-8'))
         return self.iroh_doc.get_one(query)
+
+    def release(self, path, flags, fh):
+        fh.file.close()
+        self._sync(fh.node)
+
+    def fsync(self, path, isfsyncfile, fh):
+        os.fsync(fh.fd)
+        self._sync(fh.node)
+
+    def flush(self, path, fh):
+        os.fsync(fh.fd)
+        self._sync(fh.node)
+
+    def _sync(self, node):
+        self._commit(node)
 
     def _on_change(self):
         self.logger.info("event: on_change")
@@ -340,6 +355,7 @@ class IrohFS(Fuse):
             real_path = self._real_path(node)
             os.mknod(real_path, mode=0o600 | stat.S_IFREG)
             self._commit(node)
+            self.logger.debug(f"Creating {real_path} with {flags}")
             file = os.fdopen(os.open(real_path, flags))
             fh = IrohFileHandle(key, node, file)
             self._on_change()
@@ -419,7 +435,11 @@ class IrohFS(Fuse):
 
     def read(self, path, length, offset, fh):
         self.logger.info("read: " + path)
+        real_path = self._real_path(fh.node)
+        fh.file.close()
         self._refresh_if_stale(fh.node)
+        fh.file = os.fdopen(os.open(real_path, 'r'))
+        fh.fd = fh.file.fileno()
         return os.pread(fh.fd, length, offset)
 
     def ftruncate(self, path, length, fh):
@@ -468,7 +488,7 @@ class IrohFS(Fuse):
     def write(self, path, buf, offset, fh):
         self.logger.info("write: " + path + " " + str(len(buf)) + "@" + str(offset))
         res = os.pwrite(fh.fd, buf, offset)
-        self._commit(fh.node)
+        # self._commit(fh.node)
         return res
 
 
