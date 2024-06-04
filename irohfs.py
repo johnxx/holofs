@@ -122,27 +122,18 @@ class IrohFS(Fuse):
 
         self._resync()
 
-        max_retries = 3
         retries = 0
+        max_retries = 3
 
         while retries < max_retries:
-            self.root_key, self.root_node = self._load_root()
-
-            if not self.root_node and retries < 3:
-                root_stat = IrohStat()
-                root_stat.st_mode = stat.S_IFDIR | 0o755
-                root_stat.st_nlink = 2
-                newfs = {
-                    'type': 'dir',
-                    "stat": root_stat.to_dict(),
-                    'uuid': str(uuid.uuid4())
-                }
-                time.sleep(self.refresh_interval)
-                print("Waiting for", str(self.refresh_interval * retries), "seconds for root node to be created")
-                continue
-            else:
+            try:
+                self.root_key, self.root_node = self._load_root()
                 break
-                doc.set_bytes(author,  b'root.json', dumps(newfs).encode('utf-8'))
+            except Exception as e:
+                self._resync()
+                print("Trying %s more times to load the filesystem" % (max_retries - retries))
+        else:
+            raise Exception("failed to load the filesystem")
 
 
     def main(self, *args, **kwargs):
@@ -150,37 +141,33 @@ class IrohFS(Fuse):
         return Fuse.main(self, *args, **kwargs)
 
     def _latest_prefix_many(self, prefix):
+        self.logger.info("query latest entries matching prefix: %s" % prefix)
         # @TODO: The right thing
         # query = iroh.Query.key_prefix(prefix.encode('utf-8'), None)
         # return self.iroh_doc.get_many(query)
-        query = iroh.Query.single_latest_per_key(None)
-        entries = self.iroh_doc.get_many(query)
-        res = {}
-        for e in entries:
-            idx = e.key().decode('utf-8')
-            if idx.startswith(prefix):
-                res[idx] = e
+        query = iroh.Query.key_exact(prefix.encode('utf-8'), None).single_latest_per_key(None)
+        return self.iroh_doc.get_many(query)
 
     def _latest_prefix_one(self, prefix):
+        self.logger.info("query latest one entry matching prefix: %s" % prefix)
         # @TODO: The right thing
         # query = iroh.Query.key_prefix(prefix.encode('utf-8'), None)
         # return self.iroh_doc.get_one(query)
-        query = iroh.Query.single_latest_per_key(None)
-        entries = self.iroh_doc.get_many(query)
-        for e in entries:
-            if e.key().decode('utf-8').startswith(prefix):
-                return e
+        query = iroh.Query.key_prefix(prefix.encode('utf-8'), None).single_latest_per_key(None)
+        return self.iroh_doc.get_one(query)
 
     def _latest_key_one(self, key):
+        self.logger.info("query latest entry for key: %s" % key)
         # @TODO: The right thing
         # query = iroh.Query.key_exact(key.encode('utf-8'))
         # return self.iroh_doc.get_one(query)
-        query = iroh.Query.single_latest_per_key(None)
-        entries = self.iroh_doc.get_many(query)
-        for e in entries:
-            if e.key().decode('utf-8') == key:
-                return e
-
+        # query = iroh.Query.key_exact(key.encode('utf-8'), None).single_latest_per_key(None)
+        print(key.encode('utf-8'))
+        # query = iroh.Query.key_exact(key.encode('utf-8'), None).single_latest_per_key(None)
+        query = iroh.Query.key_exact(key.encode('utf-8'), None)
+        res = self.iroh_doc.get_one(query)
+        print(str(res))
+        return res
 
     def _on_change(self):
         self.logger.info("event: on_change")
@@ -195,7 +182,6 @@ class IrohFS(Fuse):
         #     except Exception as e:
         #         return -errno.ENOENT
         return IrohStat(fh.node.get('stat'))
-
 
     def getattr(self, path):
         self.logger.info("getattr: " + path)
@@ -220,8 +206,8 @@ class IrohFS(Fuse):
         # self.logger.info('mtime: ' + path + "(" + str(mtime) + ")")
 
     def _load_root(self):
-        key = b'root.json'
-        self.logger.info("load: " + str(key))
+        key = 'root.json'
+        self.logger.info("load: " + key)
         # query = iroh.Query.key_exact(key, None)
         # return key, loads(self.iroh_doc.get_one(query).content_bytes(self.iroh_doc))
         return key, loads(self._latest_key_one(key).content_bytes(self.iroh_doc))
@@ -229,7 +215,7 @@ class IrohFS(Fuse):
     def _latest_contents(self, key):
         # query = iroh.Query.key_exact(key.encode('utf-8'), None)
         # return self.iroh_doc.get_one(query).content_bytes(self.iroh_doc)
-        return key, loads(self._latest_key_one(key).content_bytes(self.iroh_doc))
+        return loads(self._latest_key_one(key).content_bytes(self.iroh_doc))
 
     def _find_entry(self, dir_uuid, name):
         entry_key_prefix = "fs/%s/%s/" % (dir_uuid, name)
@@ -566,7 +552,17 @@ if __name__ == '__main__':
     dl_pol = doc.get_download_policy()
     doc.set_download_policy(dl_pol.everything())
 
-
+    if create:
+        root_stat = IrohStat()
+        root_stat.st_mode = stat.S_IFDIR | 0o755
+        root_stat.st_nlink = 2
+        newfs = {
+            'type': 'dir',
+            "stat": root_stat.to_dict(),
+            'uuid': str(uuid.uuid4())
+        }
+        print("Initializing filesystem...")
+        doc.set_bytes(author, b'root.json', dumps(newfs).encode('utf-8'))
     server.iroh_init(iroh_node, author, doc)
 
-    server.main(doc=doc, author=author, iroh_node=iroh_node)
+    server.main()
