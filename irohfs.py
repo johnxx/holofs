@@ -420,6 +420,7 @@ class IrohFS(Fuse):
             # query = iroh.Query.key_exact(data_key.encode('utf-8'), query_opts)
             # data_entry = self.iroh_doc.get_one(query)
             data_entry = self._latest_key_one(data_key)
+            print("data_entry key: " + data_entry.key().decode('utf-8'))
             if not data_entry:
                 raise Exception("HONK! HONK! HONK!")
             self.logger.info("export " + str(data_key) + " to " + real_path + " size=" + str(
