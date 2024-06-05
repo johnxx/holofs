@@ -391,8 +391,7 @@ class IrohFS(Fuse):
         self.iroh_doc.start_sync(node_addrs)
         self.last_resync = time.monotonic()
 
-    def _refresh(self, fh):
-        node = fh.node
+    def _refresh(self, node):
         real_path = self._real_path(node)
 
         self._resync_if_stale()
@@ -418,12 +417,16 @@ class IrohFS(Fuse):
                              + " size=" + str(node.get('stat').get('st_size')))
             self.iroh_doc.export_file(data_entry, real_path, None)
 
-    def _refresh_if_stale(self, fh):
+    def _refresh_if_stale(self, node):
         # @TODO: This should conditionally refresh the local file only if needed
-        # Right now I'm thinking we should compare mtime of the "real" file and the mtime of the iroh stat entry
-        real_stat = os.fstat(fh.fd)
-        if real_stat.st_mtime > fh.node.get('stat').get('st_mtime'):
-            return self._refresh(fh)
+        # Right now we compare mtime of the "real" file and the mtime of the iroh stat entry
+        # But that's probably wrong in the case that someone intentionally backdates the mtime of a file
+        # We could add an internal "real_mtime" field to nodes? Or set a version number in xattrs?
+        # Regardless I think this is fine for now
+        real_path = self._real_path(node)
+        real_stat = os.stat(real_path)
+        if real_stat.st_mtime < node.get('stat').get('st_mtime'):
+            return self._refresh(node)
 
     def read(self, path, length, offset, fh):
         self.logger.info(f"read: {path} ({length}@{offset}")
@@ -439,9 +442,9 @@ class IrohFS(Fuse):
     def truncate(self, path, length):
         self.logger.info("truncate: " + path + " to" + str(length))
         try:
-            _, node = self._walk(path)
-            self._refresh_if_stale(node)
+            key, node = self._walk(path)
             real_path = self._real_path(node)
+            self._refresh_node_if_stale(key, node, real_path)
             os.truncate(real_path, length)
         except Exception as e:
             return -errno.ENOENT
