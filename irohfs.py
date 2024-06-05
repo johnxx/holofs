@@ -423,7 +423,7 @@ class IrohFS(Fuse):
             if not data_entry:
                 raise Exception("HONK! HONK! HONK!")
             print("data_entry key: " + data_entry.key().decode('utf-8'))
-            self.logger.info("export " + str(data_key) + " to " + real_path + " size=" + str(
+            self.logger.info("export " + str(data_key) + " to " + str(real_path) + " size=" + str(
                 node.get('stat').get('st_size')))
             self.iroh_doc.export_file(data_entry, real_path, None)
         self.last_refresh = time.monotonic()
