@@ -114,7 +114,7 @@ class IrohFS(Fuse):
         elif t == iroh.LiveEventType.PENDING_CONTENT_READY:
             self.logger.info("Pending content ready!")
         else:
-            print(t)
+            self.logger.error(str(t))
             raise Exception("unknown LiveEventType")
 
     def iroh_init(self, iroh_node, author, doc):
@@ -181,12 +181,6 @@ class IrohFS(Fuse):
     def fgetattr(self, path, fh):
         self.logger.info("fgetattr: " + path)
         self._resync_if_stale()
-        # if not node:
-        #     try:
-        #         self.logger.warning("fgetattr: called without fh!")
-        #         _, node = self._walk(path)
-        #     except Exception as e:
-        #         return -errno.ENOENT
         return IrohStat(fh.node.get('stat'))
 
     def getattr(self, path):
@@ -353,11 +347,11 @@ class IrohFS(Fuse):
         try:
             key, node = self._persist(parent_node, name, new_file)
             real_path = self._real_path(node)
-            os.mknod(real_path, mode=0o600 | stat.S_IFREG)
-            self._commit(node)
+            # os.mknod(real_path, mode=0o600 | stat.S_IFREG)
             self.logger.debug(f"Creating {real_path} with {flags}")
             file = os.fdopen(os.open(real_path, flags))
             fh = IrohFileHandle(key, node, file)
+            self._commit(node)
             self._on_change()
             return fh
         except Exception as e:
@@ -420,17 +414,14 @@ class IrohFS(Fuse):
             # query = iroh.Query.key_exact(data_key.encode('utf-8'), query_opts)
             # data_entry = self.iroh_doc.get_one(query)
             data_entry = self._latest_key_one(data_key)
-            if not data_entry:
-                raise Exception("HONK! HONK! HONK!")
-            print("data_entry key: " + data_entry.key().decode('utf-8'))
-            self.logger.info("export " + str(data_key) + " to " + str(real_path) + " size=" + str(
-                node.get('stat').get('st_size')))
+            self.logger.info("export " + str(data_key) + " to " + str(real_path)
+                             + " size=" + str(node.get('stat').get('st_size')))
             self.iroh_doc.export_file(data_entry, real_path, None)
         self.last_refresh = time.monotonic()
 
     def _refresh_if_stale(self, node):
         # @TODO: This should conditionally refresh the local file only if needed
-        # RIght now I'm thinking we should compare mtime of the "real" file and the mtime of the iroh stat entry
+        # Right now I'm thinking we should compare mtime of the "real" file and the mtime of the iroh stat entry
         # current_time = time.monotonic()
         # if current_time > self.last_refresh + self.refresh_interval:
         #     return self._refresh(node)
@@ -438,11 +429,7 @@ class IrohFS(Fuse):
 
     def read(self, path, length, offset, fh):
         self.logger.info(f"read: {path} ({length}@{offset}")
-        real_path = self._real_path(fh.node)
-        fh.file.close()
         self._refresh_if_stale(fh.node)
-        fh.file = os.fdopen(os.open(real_path, os.O_RDONLY))
-        fh.fd = fh.file.fileno()
         return os.pread(fh.fd, length, offset)
 
     def ftruncate(self, path, length, fh):
