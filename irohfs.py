@@ -365,15 +365,11 @@ class IrohFS(Fuse):
     def open(self, path, flags):
         self.logger.info("open: " + path)
         key, node = self._walk(path)
-        print("a")
         if not node:
             self.logger.info("open: " + path + ": no such file or directory")
             return -errno.ENOENT
-        print("b")
         real_path = self._real_path(node)
-        print("c")
         self._refresh_if_stale(node)
-        print("d")
         try:
             file = os.fdopen(os.open(real_path, flags))
             fh = IrohFileHandle(key, node, file)
@@ -433,23 +429,18 @@ class IrohFS(Fuse):
         # But that's probably wrong in the case that someone intentionally backdates the mtime of a file
         # We could add an internal "real_mtime" field to nodes? Or set a version number in xattrs?
         # Regardless I think this is fine for now
-        print("e")
         real_path = self._real_path(node)
-        print("f")
         should_refresh = True
         try:
             real_stat = os.stat(real_path)
             if real_stat.st_mtime >= node.get('stat').get('st_mtime'):
                 should_refresh = False
         except Exception as e:
-            print(traceback.format_exc())
-        print("g")
+            pass
+            # print(traceback.format_exc())
         if should_refresh:
             self.logger.info(f"starting refresh of: {real_path}")
             return self._refresh(node)
-        else:
-            self.logger.info(f"didn't refresh: {real_path}")
-
 
     def read(self, path, length, offset, fh):
         self.logger.info(f"read: {path} ({length}@{offset}")
