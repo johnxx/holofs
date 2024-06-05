@@ -416,6 +416,7 @@ class IrohFS(Fuse):
             self.logger.info("export " + str(data_key) + " to " + str(real_path)
                              + " size=" + str(node.get('stat').get('st_size')))
             self.iroh_doc.export_file(data_entry, real_path, None)
+            os.utime(real_path, (node['stat']['st_atime'], node['stat']['st_mtime']))
 
     def _refresh_if_stale(self, node):
         # @TODO: This should conditionally refresh the local file only if needed
