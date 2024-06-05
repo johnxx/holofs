@@ -66,7 +66,6 @@ class IrohFS(Fuse):
         self.root_key = None
         self.root_node = None
 
-        self.last_refresh = 0
         self.last_resync = 0
 
         self.resync_interval = 3
@@ -392,7 +391,8 @@ class IrohFS(Fuse):
         self.iroh_doc.start_sync(node_addrs)
         self.last_resync = time.monotonic()
 
-    def _refresh(self, node):
+    def _refresh(self, fh):
+        node = fh.node
         real_path = self._real_path(node)
 
         self._resync_if_stale()
@@ -417,15 +417,13 @@ class IrohFS(Fuse):
             self.logger.info("export " + str(data_key) + " to " + str(real_path)
                              + " size=" + str(node.get('stat').get('st_size')))
             self.iroh_doc.export_file(data_entry, real_path, None)
-        self.last_refresh = time.monotonic()
 
-    def _refresh_if_stale(self, node):
+    def _refresh_if_stale(self, fh):
         # @TODO: This should conditionally refresh the local file only if needed
         # Right now I'm thinking we should compare mtime of the "real" file and the mtime of the iroh stat entry
-        # current_time = time.monotonic()
-        # if current_time > self.last_refresh + self.refresh_interval:
-        #     return self._refresh(node)
-        return self._refresh(node)
+        real_stat = os.fstat(fh.fd)
+        if real_stat.st_mtime > fh.node.get('stat').get('st_mtime'):
+            return self._refresh(fh)
 
     def read(self, path, length, offset, fh):
         self.logger.info(f"read: {path} ({length}@{offset}")
@@ -472,6 +470,9 @@ class IrohFS(Fuse):
         else:
             self.iroh_doc.import_file(self.iroh_author, data_key.encode('utf-8'), real_path, True, None)
         node['stat']['st_size'] = os.stat(real_path).st_size
+        node['stat']['st_atime'] = os.stat(real_path).st_atime
+        node['stat']['st_mtime'] = os.stat(real_path).st_mtime
+        node['stat']['st_ctime'] = os.stat(real_path).st_ctime
         self._on_change()
         self._update(node)
 
