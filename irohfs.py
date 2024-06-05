@@ -436,9 +436,15 @@ class IrohFS(Fuse):
         print("e")
         real_path = self._real_path(node)
         print("f")
-        real_stat = os.stat(real_path)
+        should_refresh = True
+        try:
+            real_stat = os.stat(real_path)
+            if real_stat.st_mtime >= node.get('stat').get('st_mtime'):
+                should_refresh = False
+        except Exception as e:
+            print(traceback.format_exc())
         print("g")
-        if real_stat.st_mtime < node.get('stat').get('st_mtime'):
+        if should_refresh:
             self.logger.info(f"starting refresh of: {real_path}")
             return self._refresh(node)
         else:
