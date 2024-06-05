@@ -14,6 +14,7 @@ from json import dumps, loads
 
 fuse.fuse_python_api = (0, 2)
 
+
 def _flag2mode(flags):
     md = {os.O_RDONLY: 'rb', os.O_WRONLY: 'wb', os.O_RDWR: 'wb+'}
     m = md[flags & (os.O_RDONLY | os.O_WRONLY | os.O_RDWR)]
@@ -22,6 +23,7 @@ def _flag2mode(flags):
         m = m.replace('w', 'a', 1)
 
     return m
+
 
 class IrohStat(fuse.Stat):
     def __init__(self, *initial_data, **kwargs):
@@ -74,8 +76,8 @@ class IrohFS(Fuse):
         super(IrohFS, self).__init__(*args, **kwargs)
 
         # Debug logging
-        log_level = logging.DEBUG
-        # log_level = logging.INFO
+        # log_level = logging.DEBUG
+        log_level = logging.INFO
         self.logger = self._setup_logging(log_level)
 
         self.queue = queue.Queue()
@@ -109,9 +111,9 @@ class IrohFS(Fuse):
             self.logger.info(f"LiveEvent - NeighborDown: node id {node_id.to_string()}")
         elif t == iroh.LiveEventType.SYNC_FINISHED:
             sync_event = e.as_sync_finished()
-            self.logger.info(f"Live Event - SyncFinished: synced peer: {sync_event.peer.to_string()}")
+            self.logger.info(f"LiveEvent - SyncFinished: synced peer: {sync_event.peer.to_string()}")
         elif t == iroh.LiveEventType.PENDING_CONTENT_READY:
-            self.logger.info("Pending content ready!")
+            self.logger.info("LiveEvent - Pending content ready!")
         else:
             self.logger.error(str(t))
             raise Exception("unknown LiveEventType")
@@ -141,11 +143,11 @@ class IrohFS(Fuse):
             raise Exception("failed to load the filesystem")
 
     def main(self, *args, **kwargs):
-        self.logger.info("entered: Fuse.main()")
+        self.logger.debug("entered: Fuse.main()")
         return Fuse.main(self, *args, **kwargs)
 
     def _latest_prefix_many(self, prefix):
-        self.logger.info("query latest entries matching prefix: %s" % prefix)
+        self.logger.debug("query latest entries matching prefix: %s" % prefix)
         query = iroh.Query.single_latest_per_key_prefix(prefix.encode('utf-8'), None)
         return self.iroh_doc.get_many(query)
 
@@ -160,14 +162,17 @@ class IrohFS(Fuse):
         return self.iroh_doc.get_one(query)
 
     def release(self, path, flags, fh):
+        self.logger.info(f"release: {path}")
         fh.file.close()
         self._sync(fh.node)
 
     def fsync(self, path, isfsyncfile, fh):
+        self.logger.info(f"fsync: {path}")
         os.fsync(fh.fd)
         self._sync(fh.node)
 
     def flush(self, path, fh):
+        self.logger.info(f"flush: {path}")
         os.fsync(fh.fd)
         self._sync(fh.node)
 
@@ -183,7 +188,7 @@ class IrohFS(Fuse):
         return IrohStat(fh.node.get('stat'))
 
     def getattr(self, path):
-        self.logger.info("getattr: " + path)
+        self.logger.debug("getattr: " + path)
         self._resync_if_stale()
         try:
             _, node = self._walk(path)
@@ -194,34 +199,23 @@ class IrohFS(Fuse):
             return -errno.ENOENT
 
     def readdir(self, path, offset):
-        self.logger.info("readdir: " + path)
+        self.logger.debug("readdir: " + path)
         self._resync_if_stale()
         _, node = self._walk(path)
         return self._dir_entries(node)
 
-    def utime(self, path, times):
-        self.logger.info("utime (unimplemented): " + path)
-        # (utime, mtime) = times
-        # self.logger.info('mtime: ' + path + "(" + str(mtime) + ")")
-
     def _load_root(self):
         key = 'root.json'
-        self.logger.info("load: " + key)
-        # query = iroh.Query.key_exact(key, None)
-        # return key, loads(self.iroh_doc.get_one(query).content_bytes(self.iroh_doc))
+        self.logger.debug("load: " + key)
         return key, loads(self._latest_key_one(key).content_bytes(self.iroh_doc))
 
     def _latest_contents(self, key):
-        # query = iroh.Query.key_exact(key.encode('utf-8'), None)
-        # return self.iroh_doc.get_one(query).content_bytes(self.iroh_doc)
         return self._latest_key_one(key).content_bytes(self.iroh_doc)
 
     def _find_entry(self, dir_uuid, name):
         entry_key_prefix = "fs/%s/%s/" % (dir_uuid, name)
-        self.logger.info("find_entry: " + entry_key_prefix)
+        self.logger.debug("find_entry: " + entry_key_prefix)
         # @TODO: This should be a get many that we filter
-        # query = iroh.Query.key_prefix(entry_key_prefix.encode('utf-8'), None)
-        # entry = self.iroh_doc.get_one(query)
         entry = self._latest_prefix_one(entry_key_prefix)
         if entry:
             elements = entry.key().decode('utf-8').split('/')
@@ -231,7 +225,7 @@ class IrohFS(Fuse):
             return None
 
     def _load_node(self, stat_key):
-        self.logger.info("load: " + stat_key)
+        self.logger.debug("load: " + stat_key)
         return stat_key, loads(self._latest_contents(stat_key))
 
     def _dir_entries(self, node):
@@ -247,12 +241,10 @@ class IrohFS(Fuse):
 
     def _list_children(self, node):
         prefix = "fs/%s/" % node.get('uuid')
-        # query = iroh.Query.key_prefix(prefix.encode('utf-8'), None)
-        # return self.iroh_doc.get_many(query)
         return self._latest_prefix_many(prefix)
 
     def _walk_from_node(self, node, path):
-        self.logger.info("_walk_from_node: " + str(path))
+        self.logger.debug("_walk_from_node: " + str(path))
 
         lookup_el = path.pop(0)
         stat_key = self._find_entry(node.get('uuid'), lookup_el)
@@ -269,7 +261,7 @@ class IrohFS(Fuse):
             return self._walk_from_node(new_node, path)
 
     def _walk(self, path):
-        self.logger.info("_walk: " + path)
+        self.logger.debug("_walk: " + path)
         path = os.path.normpath(path)
         try:
             if os.path.dirname(path) == '/' and os.path.basename(path) == '':
@@ -347,7 +339,6 @@ class IrohFS(Fuse):
         try:
             key, node = self._persist(parent_node, name, new_file)
             real_path = self._real_path(node)
-            # os.mknod(real_path, mode=0o600 | stat.S_IFREG)
             self.logger.debug(f"Creating {real_path} with {flags}")
             file = os.fdopen(os.open(real_path, flags))
             fh = IrohFileHandle(key, node, file)
@@ -410,12 +401,6 @@ class IrohFS(Fuse):
             os.truncate(real_path, 0)
         else:
             data_key = self._data_key(node.get('uuid'))
-            # query_opts = iroh.QueryOptions(
-            #     sort_by=iroh.SortBy(iroh.SortBy.AUTHOR_KEY),
-            #     direction=iroh.SortDirection(iroh.SortDirection.DESC),
-            #     offset=0, limit=0)
-            # query = iroh.Query.key_exact(data_key.encode('utf-8'), query_opts)
-            # data_entry = self.iroh_doc.get_one(query)
             data_entry = self._latest_key_one(data_key)
             self.logger.info("export: " + str(data_key) + " to " + str(real_path)
                              + " size=" + str(node.get('stat').get('st_size')))
@@ -439,11 +424,20 @@ class IrohFS(Fuse):
             pass
             # print(traceback.format_exc())
         if should_refresh:
-            self.logger.info(f"starting refresh of: {real_path}")
+            self.logger.debug(f"starting refresh of: {real_path}")
             return self._refresh(node)
 
+    def unlink(self, path):
+        self.logger.info("unlink: " + path)
+        parent_path = os.path.dirname(path)
+        _, parent_node = self._walk(parent_path)
+        name = os.path.basename(path)
+        key, node = self._walk(path)
+        entry_key = self._entry_key(parent_node.get('uuid'), name, node.get('uuid'))
+        self.iroh_doc._del(self.iroh_author, entry_key.encode('utf-8'))
+
     def read(self, path, length, offset, fh):
-        self.logger.info(f"read: {path} ({length}@{offset}")
+        self.logger.info(f"read: {path} ({length}@{offset})")
         self._refresh_if_stale(fh.node)
         return os.pread(fh.fd, length, offset)
 
@@ -466,7 +460,7 @@ class IrohFS(Fuse):
     def _persist(self, parent, name, node):
         stat_key = self._stat_key(node.get('uuid'))
         entry_key = self._entry_key(parent.get('uuid'), name, node.get('uuid'))
-        self.logger.info("dir entry: " + entry_key + " stat: " + stat_key)
+        self.logger.debug("dir entry: " + entry_key + " stat: " + stat_key)
         self.iroh_doc.set_bytes(self.iroh_author, stat_key.encode('utf-8'), dumps(node).encode('utf-8'))
         self.iroh_doc.set_bytes(self.iroh_author, entry_key.encode('utf-8'), b'\x00')
         return stat_key, node
@@ -479,24 +473,23 @@ class IrohFS(Fuse):
         data_key = self._data_key(node.get('uuid'))
         real_path = self._real_path(node)
         real_stat = os.stat(real_path)
-        # data_entry = self.iroh_doc.get_one(iroh.Query.key_exact(data_key.encode('utf-8'), None))
         data_entry = self._latest_key_one(data_key)
         real_size = real_stat.st_size
         if data_entry and real_size == 0:
             self.iroh_doc._del(self.iroh_author, data_key.encode('utf-8'))
         else:
-            self.iroh_doc.import_file(self.iroh_author, data_key.encode('utf-8'), real_path, True, None)
-        node['stat']['st_size'] = os.stat(real_path).st_size
-        node['stat']['st_atime'] = os.stat(real_path).st_atime
-        node['stat']['st_mtime'] = os.stat(real_path).st_mtime
-        node['stat']['st_ctime'] = os.stat(real_path).st_ctime
+            self.iroh_doc.import_file(self.iroh_author, data_key.encode('utf-8'), real_path, False, None)
+
+        node['stat']['st_size'] = real_stat.st_size
+        node['stat']['st_atime'] = real_stat.st_atime
+        node['stat']['st_mtime'] = real_stat.st_mtime
+        node['stat']['st_ctime'] = real_stat.st_ctime
         self._on_change()
         self._update(node)
 
     def write(self, path, buf, offset, fh):
         self.logger.info("write: " + path + " " + str(len(buf)) + "@" + str(offset))
         res = os.pwrite(fh.fd, buf, offset)
-        # self._commit(fh.node)
         return res
 
 
