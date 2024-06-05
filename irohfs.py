@@ -242,6 +242,7 @@ class IrohFS(Fuse):
         ]
         for child in children:
             entries.append(self._dir_entry_from_key(child.key()))
+            self.info.debug(child.key().decode('utf-8'))
         return entries
 
     def _list_children(self, node):
@@ -369,9 +370,12 @@ class IrohFS(Fuse):
             return -errno.ENOENT
         real_path = self._real_path(node)
         self._refresh_if_stale(node)
-        file = os.fdopen(os.open(real_path, flags))
-        fh = IrohFileHandle(key, node, file)
-        return fh
+        try:
+            file = os.fdopen(os.open(real_path, flags))
+            fh = IrohFileHandle(key, node, file)
+            return fh
+        except Exception as e:
+            print(traceback.format_exc())
 
     def _resync_if_stale(self):
         current_time = time.monotonic()
@@ -413,10 +417,11 @@ class IrohFS(Fuse):
             # query = iroh.Query.key_exact(data_key.encode('utf-8'), query_opts)
             # data_entry = self.iroh_doc.get_one(query)
             data_entry = self._latest_key_one(data_key)
-            self.logger.info("export " + str(data_key) + " to " + str(real_path)
+            self.logger.info("export: " + str(data_key) + " to " + str(real_path)
                              + " size=" + str(node.get('stat').get('st_size')))
             self.iroh_doc.export_file(data_entry, real_path, None)
-            os.utime(real_path, (node['stat']['st_atime'], node['stat']['st_mtime']))
+            self.logger.info(f"refreshed: {real_path}")
+        os.utime(real_path, (node['stat']['st_atime'], node['stat']['st_mtime']))
 
     def _refresh_if_stale(self, node):
         # @TODO: This should conditionally refresh the local file only if needed
@@ -427,6 +432,7 @@ class IrohFS(Fuse):
         real_path = self._real_path(node)
         real_stat = os.stat(real_path)
         if real_stat.st_mtime < node.get('stat').get('st_mtime'):
+            self.logger.info(f"starting refresh of: {real_path}")
             return self._refresh(node)
 
     def read(self, path, length, offset, fh):
