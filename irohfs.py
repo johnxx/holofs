@@ -433,8 +433,11 @@ class IrohFS(Fuse):
         # But that's probably wrong in the case that someone intentionally backdates the mtime of a file
         # We could add an internal "real_mtime" field to nodes? Or set a version number in xattrs?
         # Regardless I think this is fine for now
+        print("e")
         real_path = self._real_path(node)
+        print("f")
         real_stat = os.stat(real_path)
+        print("g")
         if real_stat.st_mtime < node.get('stat').get('st_mtime'):
             self.logger.info(f"starting refresh of: {real_path}")
             return self._refresh(node)
