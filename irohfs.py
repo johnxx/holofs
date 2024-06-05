@@ -242,7 +242,7 @@ class IrohFS(Fuse):
         ]
         for child in children:
             entries.append(self._dir_entry_from_key(child.key()))
-            self.info.debug(child.key().decode('utf-8'))
+            self.logger.debug("  dir_entry: " + child.key().decode('utf-8'))
         return entries
 
     def _list_children(self, node):
