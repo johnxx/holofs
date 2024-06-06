@@ -541,7 +541,12 @@ if __name__ == '__main__':
         author = iroh.AuthorId.from_string(author_id)
     else:
         authors = iroh_node.author_list()
-        author = authors[0]
+        if len(authors) > 0:
+            author = authors[0]
+        else:
+        print("Assumed author id: {}".format(author.to_string()))
+            author = iroh_node.author_create()
+
     print("Assumed author id: {}".format(author.to_string()))
 
     if ticket_id:
