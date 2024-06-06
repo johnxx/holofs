@@ -544,7 +544,7 @@ if __name__ == '__main__':
         if len(authors) > 0:
             author = authors[0]
         else:
-        print("Assumed author id: {}".format(author.to_string()))
+            print("Assumed author id: {}".format(author.to_string()))
             author = iroh_node.author_create()
 
     print("Assumed author id: {}".format(author.to_string()))
