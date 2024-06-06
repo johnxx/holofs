@@ -77,7 +77,8 @@ class IrohFS(Fuse):
 
         # Debug logging
         # log_level = logging.DEBUG
-        log_level = logging.INFO
+        # log_level = logging.INFO
+        log_level = logging.WARNING
         self.logger = self._setup_logging(log_level)
 
         self.queue = queue.Queue()
@@ -195,7 +196,7 @@ class IrohFS(Fuse):
             st = IrohStat(node.get('stat'))
             return st
         except Exception as e:
-            self.logger.info("getattr: " + path + ": no such file or directory")
+            self.logger.debug("getattr: " + path + ": no such file or directory")
             return -errno.ENOENT
 
     def readdir(self, path, offset):
@@ -558,8 +559,7 @@ if __name__ == '__main__':
 
     if share:
         shareable_ticket_id = doc.share(iroh.ShareMode.WRITE, iroh.AddrInfoOptions.RELAY_AND_ADDRESSES)
-        print("You can share write access to the document with the following ticket:")
-        print("  " + shareable_ticket_id)
+        print("You can share write access to the document with the following ticket: " + shareable_ticket_id)
 
     dl_pol = doc.get_download_policy()
     doc.set_download_policy(dl_pol.everything())
