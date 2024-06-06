@@ -142,6 +142,7 @@ class IrohFS(Fuse):
             retries += 1
         else:
             raise Exception("failed to load the filesystem")
+        print("Connected to filesystem!")
 
     def main(self, *args, **kwargs):
         self.logger.debug("entered: Fuse.main()")
