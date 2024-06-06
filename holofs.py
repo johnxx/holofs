@@ -9,7 +9,6 @@ import fuse
 import iroh
 import logging
 from fuse import Fuse
-# from cbor2 import dumps, loads
 from json import dumps, loads
 
 fuse.fuse_python_api = (0, 2)
@@ -25,7 +24,7 @@ def _flag2mode(flags):
     return m
 
 
-class IrohStat(fuse.Stat):
+class HoloFSStat(fuse.Stat):
     def __init__(self, *initial_data, **kwargs):
 
         self.st_mode = 0
@@ -49,7 +48,7 @@ class IrohStat(fuse.Stat):
         return vars(self)
 
 
-class IrohFileHandle(object):
+class HoloFSFileHandle(object):
     def __init__(self, key, node, file):
         self.key = key
         self.node = node
@@ -57,7 +56,7 @@ class IrohFileHandle(object):
         self.fd = self.file.fileno()
 
 
-class IrohFS(Fuse):
+class HoloFS(Fuse):
     def __init__(self, *args, **kwargs):
         self.state_dir = kwargs.pop('state_dir')
 
@@ -73,7 +72,7 @@ class IrohFS(Fuse):
         self.resync_interval = 3
         self.refresh_interval = 3
 
-        super(IrohFS, self).__init__(*args, **kwargs)
+        super(HoloFS, self).__init__(*args, **kwargs)
 
         # Debug logging
         # log_level = logging.DEBUG
@@ -84,7 +83,7 @@ class IrohFS(Fuse):
         self.queue = queue.Queue()
 
     def _setup_logging(self, log_level):
-        logger = logging.getLogger('IrohFS')
+        logger = logging.getLogger('HoloFS')
         logger.setLevel(log_level)
         console = logging.StreamHandler()
         formatter = logging.Formatter('%(asctime)s %(levelname)s | %(message)s')
@@ -187,14 +186,14 @@ class IrohFS(Fuse):
     def fgetattr(self, path, fh):
         self.logger.info("fgetattr: " + path)
         self._resync_if_stale()
-        return IrohStat(fh.node.get('stat'))
+        return HoloFSStat(fh.node.get('stat'))
 
     def getattr(self, path):
         self.logger.debug("getattr: " + path)
         self._resync_if_stale()
         try:
             _, node = self._walk(path)
-            st = IrohStat(node.get('stat'))
+            st = HoloFSStat(node.get('stat'))
             return st
         except Exception as e:
             self.logger.debug("getattr: " + path + ": no such file or directory")
@@ -298,7 +297,7 @@ class IrohFS(Fuse):
         name = os.path.basename(path)
         node_uuid = str(uuid.uuid4())
 
-        new_stat = IrohStat()
+        new_stat = HoloFSStat()
         new_stat.st_mode = stat.S_IFDIR | 0o755
         new_stat.st_nlink = 2
         new_dir = {
@@ -316,7 +315,7 @@ class IrohFS(Fuse):
     def _new_node(self, type, name):
         if type not in ['file', 'dir']:
             raise Exception("Unknown node type: " + type)
-        new_stat = IrohStat()
+        new_stat = HoloFSStat()
         new_stat.st_mode = stat.S_IFREG | 0o644
         new_stat.st_nlink = 1
         return {
@@ -343,7 +342,7 @@ class IrohFS(Fuse):
             real_path = self._real_path(node)
             self.logger.debug(f"Creating {real_path} with {flags}")
             file = os.fdopen(os.open(real_path, flags))
-            fh = IrohFileHandle(key, node, file)
+            fh = HoloFSFileHandle(key, node, file)
             self._commit(node)
             self._on_change()
             return fh
@@ -365,7 +364,7 @@ class IrohFS(Fuse):
         self._refresh_if_stale(node)
         try:
             file = os.fdopen(os.open(real_path, flags))
-            fh = IrohFileHandle(key, node, file)
+            fh = HoloFSFileHandle(key, node, file)
             return fh
         except Exception as e:
             print(traceback.format_exc())
@@ -497,16 +496,16 @@ class IrohFS(Fuse):
 
 if __name__ == '__main__':
     usage = """
-    Naive FUSE-on-Iroh Test
+    HoloFS
     """ + Fuse.fusage
 
     xdg_data_home = os.environ.get('XDG_DATA_HOME', os.path.expanduser('~/.local/share'))
     iroh_data_dir = os.environ.get('IROH_DATA_DIR', os.path.join(xdg_data_home, 'iroh'))
 
     xdg_state_home = os.environ.get('XDG_STATE_HOME', os.path.expanduser('~/.local/state'))
-    irohfs_state_dir = os.environ.get('IROHFS_STATE_DIR', os.path.join(xdg_state_home, 'irohfs'))
+    irohfs_state_dir = os.environ.get('HOLOFS_STATE_DIR', os.path.join(xdg_state_home, 'holofs'))
 
-    server = IrohFS(
+    server = HoloFS(
         version="%prog " + fuse.__version__,
         usage=usage,
         dash_s_do='setsingle',
@@ -545,7 +544,7 @@ if __name__ == '__main__':
         if len(authors) > 0:
             author = authors[0]
         else:
-            print("Assumed author id: {}".format(author.to_string()))
+            print("Creating new author ...")
             author = iroh_node.author_create()
 
     print("Assumed author id: {}".format(author.to_string()))
@@ -571,7 +570,7 @@ if __name__ == '__main__':
     doc.set_download_policy(dl_pol.everything())
 
     if create:
-        root_stat = IrohStat()
+        root_stat = HoloFSStat()
         root_stat.st_mode = stat.S_IFDIR | 0o755
         root_stat.st_nlink = 2
         newfs = {
