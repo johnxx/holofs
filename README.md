@@ -39,9 +39,11 @@ To create a new filesystem:
 
 💡 Note the Doc ID printed when you create the filesystem. You'll need this to mount it again later.
 
+To open a previously created filesystem:
+
 ```python3 holofs.py -s -f --doc=jd67twwwyqcog3ijv4lbnifnex23so4vj4v5amh36nwk627owclq ./mnt```
 
-To join a shared filesystem:
+To join a remotely shared filesystem:
 
 ```python3 holofs.py -s -f --join=docaaacbe2jkgdyajvcqgrczaeeceihuk5re4brmz5tcdrwks2ccbsmrcofagxpy3f22yds26zxw2fpwi2uxcehmkjj6fko2e5urzj6iob3x7rf4ajdnb2hi4dthixs65ltmuys2mjoojswyylzfzuxe33ifzxgk5dxn5zgwlrpauaaufaaahcfo8dc663rl3akacwbeaabyrlqblc6vqc4ivybeyaqmaqhp7fduj2hqhatxvx4elcvo ./mnt```
 
