@@ -75,9 +75,9 @@ class HoloFS(Fuse):
         super(HoloFS, self).__init__(*args, **kwargs)
 
         # Debug logging
-        # log_level = logging.DEBUG
+        log_level = logging.DEBUG
         # log_level = logging.INFO
-        log_level = logging.WARNING
+        # log_level = logging.WARNING
         self.logger = self._setup_logging(log_level)
 
         self.queue = queue.Queue()
@@ -280,6 +280,11 @@ class HoloFS(Fuse):
     def _data_key(self, node_uuid):
         return "data/%s" % node_uuid
 
+    def _path_to_entry_key(self, path):
+        parent_key, parent_node = self._walk(os.path.dirname(path))
+        key, node = self._walk_from_node(parent_node, [os.path.basename(path)])
+        return self._entry_key(parent_node.get('uuid'), os.path.basename(path), node.get('uuid'))
+
     def _entry_key(self, parent_uuid, name, node_uuid):
         return "fs/%s/%s/%s.json" % (parent_uuid, name, node_uuid)
 
@@ -287,6 +292,44 @@ class HoloFS(Fuse):
         elements = key.decode('utf-8').split('/')
         name = elements[2].removesuffix('.json')
         return fuse.Direntry(name)
+
+    def rename(self, path, path1):
+        self.logger.info('rename: ' + path + ' -> ' + path1)
+        # Reference: https://www.man7.org/linux/man-pages/man2/rename.2.html
+        # Load the source
+
+        from_parent_key, from_parent_node = self._walk(os.path.dirname(path))
+        if not from_parent_node:
+            return -errno.ENOENT
+
+        from_key, from_node = self._walk(path)
+        if not from_node:
+            return -errno.ENOENT
+        from_entry_key = self._entry_key(from_parent_node.get('uuid'), os.path.basename(path), from_node.get('uuid'))
+
+        # Try to load the dest, could fail non-fatally
+        to_key, to_node = self._walk(path1)
+
+        if to_node:
+            if to_node.get('type') == 'file' and from_node.ge.gett('type') == 'dir':
+                return -errno.ENOTDIR
+
+        # If dest doesh't exist, check if its parent does
+        # Walk to parent and construct to_key
+        to_parent_key, to_parent_node = self._walk(os.path.dirname(path1))
+        if not to_parent_node:
+            return -errno.ENOENT
+        to_entry_key = self._entry_key(to_parent_node.get('uuid'), os.path.basename(path1), from_node.get('uuid'))
+
+        # OK, try the "rename" (copy & delete)
+        try:
+            self.iroh_doc.set_bytes(self.iroh_author, to_entry_key.encode('utf-8'), b'\x00')
+            self.iroh_doc._del(self.iroh_author, from_entry_key.encode('utf-8'))
+            self._on_change()
+            self.logger.debug('moved: ' + path + ' -> ' + path1)
+        except Exception as e:
+            print(traceback.format_exc())
+            return -errno.EIO
 
     def mkdir(self, path, mode):
         self.logger.info("mkdir: " + path)
@@ -324,11 +367,15 @@ class HoloFS(Fuse):
             "uuid": str(uuid.uuid4())
         }
 
+    def utime(self, path, times):
+        self.logger.warning("utime: unimplemented")
+
     def create(self, path, flags, mode):
         self.logger.info("create: " + path)
 
         _, node_exists = self._walk(path)
         if node_exists:
+            self.logger.debug(f"Failed creating {path} with {flags}: file exists")
             return -errno.EEXIST
 
         parent_path = os.path.dirname(path)
@@ -443,9 +490,11 @@ class HoloFS(Fuse):
         return os.pread(fh.fd, length, offset)
 
     def ftruncate(self, path, length, fh):
-        self.logger.info("ftruncate: " + path + " to" + str(length))
+        self.logger.info("ftruncate: " + path + " to " + str(length))
         self._refresh_if_stale(fh.node)
-        fh.file.truncate(length)
+        # fh.file.truncate(length)
+        real_path = self._real_path(fh.node)
+        os.truncate(real_path, length)
         self._commit(fh.node)
 
     def truncate(self, path, length):
@@ -453,9 +502,10 @@ class HoloFS(Fuse):
         try:
             key, node = self._walk(path)
             real_path = self._real_path(node)
-            self._refresh_node_if_stale(key, node, real_path)
+            self._refresh_if_stale(node)
             os.truncate(real_path, length)
         except Exception as e:
+            print(traceback.format_exc())
             return -errno.ENOENT
 
     def _persist(self, parent, name, node):
