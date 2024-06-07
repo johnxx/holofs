@@ -567,7 +567,9 @@ if __name__ == '__main__':
         print("You can share write access to the document with the following ticket: " + shareable_ticket_id)
 
     dl_pol = doc.get_download_policy()
-    doc.set_download_policy(dl_pol.everything())
+    # doc.set_download_policy(dl_pol.everything())
+    dl_filter = iroh.FilterKind.prefix(b'data/')
+    doc.set_download_policy(dl_pol.everything_except([dl_filter]))
 
     if create:
         root_stat = HoloFSStat()
