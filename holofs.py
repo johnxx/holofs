@@ -213,6 +213,9 @@ class HoloFS(Fuse):
     def _latest_contents(self, key):
         return self._latest_key_one(key).content_bytes(self.iroh_doc)
 
+    def _set_key(self, key, contents):
+        return self.iroh_doc.set_bytes(self.iroh_author, key.encode('utf-8'), contents)
+
     def _find_entry(self, dir_uuid, name):
         entry_key_prefix = "fs/%s/%s/" % (dir_uuid, name)
         self.logger.debug("find_entry: " + entry_key_prefix)
@@ -542,6 +545,142 @@ class HoloFS(Fuse):
         self.logger.info("write: " + path + " " + str(len(buf)) + "@" + str(offset))
         res = os.pwrite(fh.fd, buf, offset)
         return res
+
+    class DirEntry(object):
+        def __init__(self, fs, key):
+            self._fs = fs
+            if type(fs) is not HoloFS:
+                raise Exception("fs must be a fully initialized HoloFS")
+            self.key = key
+            _, self.parent_uuid, self.name, self.node_uuid = self.key.split('/')
+
+        def persist(self):
+            self._fs._set_key(self.key, b'\x00')
+
+        def node(self):
+            return HoloFS.FSNode.load(self._fs, self.node_uuid)
+
+        def to_fuse_direntry(self):
+            return fuse.Direntry(self.name)
+
+
+    class FSNode(object):
+        def __init__(self, fs, node_uuid, stat):
+            self._fs = fs
+            self.uuid = node_uuid
+            self.stat = stat
+
+        @classmethod
+        def node_key(cls, node_uuid):
+            return f"stat/{node_uuid}.json"
+
+        @classmethod
+        def load(cls, fs, node_uuid):
+            node_key = cls.node_key(node_uuid)
+            # @TODO: This is where we'll handle policies that tell us which version of the node entry to load
+            contents = loads(fs._latest_contents(node_key))
+            node_stat = HoloFSStat(contents.get('stat')),
+
+            if stat.S_ISDIR(node_stat.st_mode):
+                return HoloFS.Dir(fs, node_uuid, node_stat)
+            elif stat.S_ISREG(node_stat.st_mode):
+                return HoloFS.File(fs, node_uuid, node_stat)
+
+            node_type = stat.S_IFMT(node_stat.st_mode)
+            raise Exception(f"Unknown node type: {node_type}")
+
+        def persist(self):
+            to_save = {
+                'stat': self.stat.to_dict()
+            }
+            self._fs._set_key(self.node_key(), dumps(to_save).encode('utf-8'))
+
+    class File(FSNode):
+        def __init__(self, fs, node_uuid, stat):
+            super().__init__(fs, node_uuid, stat)
+
+        def _data_key(self, node_uuid):
+            return f"data/{node_uuid}"
+
+        def _real_path(self, node):
+            data_file = self._data_key(self.uuid)
+            return os.path.join(self._fs.state_dir, data_file)
+
+        def open(self, flags):
+            self._refresh_if_stale()
+            return HoloFS.FileHandle(self, flags)
+
+        def _refresh_if_stale(self):
+            pass
+
+        @classmethod
+        def create(cls, fs, path, flags, mode):
+            parent_path = os.path.dirname(path)
+            name = os.path.basename(path)
+            parent_dir = fs.root_node.walk(parent_path.split('/')).node()
+
+            existing_dir_entry = parent_dir.child(name)
+            if existing_dir_entry:
+                return -errno.EEXIST
+
+            new_uuid = str(uuid.uuid4())
+            new_file = cls(fs, new_uuid, HoloFSStat({}))
+            new_direntry = parent_dir.add_child(name, new_file)
+            try:
+                new_file.persist()
+                new_direntry.persist()
+                return new_file.open(flags)
+            except Exception as e:
+                print(traceback.format_exc())
+                return -errno.EIO
+
+
+    class Dir(FSNode):
+        def __init__(self, fs, node_uuid, stat):
+            super().__init__(fs, node_uuid, stat)
+
+        def _child_prefix(self):
+            return f"fs/{self.stat.uuid}/"
+
+        def _child_search_key(self, name):
+            return f"fs/{self.stat.uuid}/{name}/"
+
+        def _child_direntry_key(self, name, node_uuid):
+            return f"fs/{self.stat.uuid}/{name}/{node_uuid}"
+
+        def _refresh_if_stale(self):
+            pass
+
+        def add_child(self, node):
+            return HoloFS.DirEntry(self._fs, self._child_direntry_key(node.name, node.uuid))
+
+        def child(self, name):
+            child_key = self._fs._latest_prefix_one(f"{self._child_prefix()}{name}/")
+            return HoloFS.DirEntry(self.fs, child_key)
+
+        def children(self):
+            results = self._fs._latest_prefix_many(self._child_prefix())
+            dir_entries = []
+            for r in results:
+                dir_entries.append(HoloFS.DirEntry(self._fs, r))
+            return dir_entries
+
+        def walk(self, path):
+            first_name = path.pop(0)
+            child_direntry = self.child(first_name)
+            if len(path) == 0:
+                return child_direntry
+            else:
+                child_fsnode = child_direntry.node()
+                if type(child_fsnode) != HoloFS.Dir:
+                    raise Exception("Not a directory")
+                return child_direntry.node().walk_direntry(path)
+
+    class FileHandle(object):
+        def __init__(self, fsnode, flags):
+            self.node = fsnode
+            self.file = os.fdopen(os.open(fsnode.real_path, flags))
+            self.fd = self.file.fileno()
 
 
 if __name__ == '__main__':
