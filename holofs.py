@@ -453,10 +453,10 @@ class HoloFS(Fuse):
         else:
             data_key = self._data_key(node.get('uuid'))
             data_entry = self._latest_key_one(data_key)
-            self.logger.info("export: " + str(data_key) + " to " + str(real_path)
+            self.logger.debug("export: " + str(data_key) + " to " + str(real_path)
                              + " size=" + str(node.get('stat').get('st_size')))
             self.iroh_doc.export_file(data_entry, real_path, None)
-            self.logger.info(f"refreshed: {real_path}")
+            self.logger.debug(f"refreshed: {real_path}")
         os.utime(real_path, (node['stat']['st_atime'], node['stat']['st_mtime']))
 
     def _refresh_if_stale(self, node):
@@ -563,6 +563,9 @@ class HoloFS(Fuse):
         def to_fuse_direntry(self):
             return fuse.Direntry(self.name)
 
+        def unlink(self):
+            self._fs.iroh_doc._del(self._fs.iroh_author, self.key.encode('utf-8'))
+
 
     class FSNode(object):
         def __init__(self, fs, node_uuid, stat):
@@ -598,20 +601,54 @@ class HoloFS(Fuse):
     class File(FSNode):
         def __init__(self, fs, node_uuid, stat):
             super().__init__(fs, node_uuid, stat)
-
-        def _data_key(self, node_uuid):
-            return f"data/{node_uuid}"
-
-        def _real_path(self, node):
-            data_file = self._data_key(self.uuid)
-            return os.path.join(self._fs.state_dir, data_file)
+            self._data_key = f"data/{node_uuid}"
+            self._real_path = os.path.join(self._fs.state_dir, self._data_key)
+            self.data_entry = self._fs._latest_contents(self._data_key)
 
         def open(self, flags):
             self._refresh_if_stale()
             return HoloFS.FileHandle(self, flags)
 
         def _refresh_if_stale(self):
-            pass
+            should_refresh = True
+            try:
+                real_stat = os.stat(self._real_path)
+                if real_stat.st_mtime >= self.stat.st_mtime:
+                    should_refresh = False
+            except Exception as e:
+                pass
+            if should_refresh:
+                return self._refresh()
+
+        def _refresh(self):
+            self._fs._resync_if_stale()
+            try:
+                os.mknod(self._real_path, mode=0o600 | stat.S_IFREG)
+            except FileExistsError:
+                pass
+
+            if self.stat.st_size == 0:
+                os.truncate(self._real_path, 0)
+            else:
+                data_entry = self._fs._latest_key_one(self._data_key)
+                self._fs.iroh_doc.export_file(data_entry, self._real_path, None)
+            os.utime(self._real_path, (self.stat.st_atime, self.stat.st_mtime))
+
+        def _commit(self):
+            real_stat = os.stat(self._real_path)
+            real_size = real_stat.st_size
+            if self.data_entry and real_size == 0:
+                self._fs.iroh_doc._del(self._fs.iroh_author, self._data_key.encode('utf-8'))
+            else:
+                self._fs.iroh_doc.import_file(self._fs.iroh_author, self._data_key.encode('utf-8'), self._real_path, False, None)
+
+            self.stat.st_size = real_stat.st_size
+            self.stat.st_atime = real_stat.st_atime
+            self.stat.st_mtime = real_stat.st_mtime
+            self.stat.st_ctime = real_stat.st_ctime
+            self.persist()
+
+
 
         @classmethod
         def create(cls, fs, path, flags, mode):
@@ -648,9 +685,6 @@ class HoloFS(Fuse):
         def _child_direntry_key(self, name, node_uuid):
             return f"fs/{self.stat.uuid}/{name}/{node_uuid}"
 
-        def _refresh_if_stale(self):
-            pass
-
         def add_child(self, node):
             return HoloFS.DirEntry(self._fs, self._child_direntry_key(node.name, node.uuid))
 
@@ -674,13 +708,22 @@ class HoloFS(Fuse):
                 child_fsnode = child_direntry.node()
                 if type(child_fsnode) != HoloFS.Dir:
                     raise Exception("Not a directory")
-                return child_direntry.node().walk_direntry(path)
+                return child_direntry.node().walk(path)
 
     class FileHandle(object):
         def __init__(self, fsnode, flags):
             self.node = fsnode
-            self.file = os.fdopen(os.open(fsnode.real_path, flags))
+            self.file = os.fdopen(os.open(fsnode._real_path, flags))
             self.fd = self.file.fileno()
+
+        def read(self, path, length, offset):
+            self.node._refresh_if_stale()
+            return os.pread(self.fd, length, offset)
+
+        def ftruncate(self, path, length):
+            self.node._refresh_if_stale()
+            os.truncate(self.node._real_path, length)
+            self.node._commit()
 
 
 if __name__ == '__main__':
