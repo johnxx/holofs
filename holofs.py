@@ -12,8 +12,6 @@ import fuse
 import iroh
 from fuse import Fuse
 
-import pydevd_pycharm
-
 fuse.fuse_python_api = (0, 2)
 
 
@@ -70,9 +68,9 @@ class HoloFS(Fuse):
         super(HoloFS, self).__init__(*args, **kwargs)
 
         # Debug logging
-        log_level = logging.DEBUG
+        # log_level = logging.DEBUG
         # log_level = logging.INFO
-        # log_level = logging.WARNING
+        log_level = logging.WARNING
         self.logger = self._setup_logging(log_level)
 
         self.queue = queue.Queue()
@@ -189,7 +187,8 @@ class HoloFS(Fuse):
                 return -errno.ENOENT
             return direntry.node().stat
         except Exception as e:
-            print(traceback.format_exc())
+            # print(traceback.format_exc())
+            self.logger.warning(f"getattr: exception loading node")
             self.logger.debug("getattr: " + path + ": no such file or directory")
             return -errno.ENOENT
 
@@ -228,7 +227,6 @@ class HoloFS(Fuse):
 
     def rename(self, path, path1):
         self.logger.info('rename: ' + path + ' -> ' + path1)
-        # pydevd_pycharm.settrace('localhost', port=30303, stdoutToServer=True, stderrToServer=True)
 
         from_direntry = self.root_direntry.walk(path)
         if not from_direntry:
@@ -261,7 +259,6 @@ class HoloFS(Fuse):
 
     def mkdir(self, path, mode):
         self.logger.info("mkdir: " + path)
-        # pydevd_pycharm.settrace('localhost', port=30303, stdoutToServer=True, stderrToServer=True)
 
         parent_path = os.path.dirname(path)
         parent_dir = self.root_direntry.walk(parent_path)
@@ -362,7 +359,7 @@ class HoloFS(Fuse):
             dir_entry = self.root_direntry.walk(path)
             dir_entry.node().truncate(length)
         except Exception as e:
-            print(traceback.format_exc())
+            # print(traceback.format_exc())
             return -errno.ENOENT
 
     def write(self, path, buf, offset, fh):
