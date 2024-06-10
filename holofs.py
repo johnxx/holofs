@@ -141,10 +141,8 @@ class HoloFS(Fuse):
                     self.root_direntry = HoloFS.RootDirEntry(self)
                     break
             except Exception as e:
-                print(traceback.format_exc())
-                exit(1)
+                print("Trying %s more times to load the filesystem" % (max_retries - retries))
             self._resync()
-            print("Trying %s more times to load the filesystem" % (max_retries - retries))
             time.sleep(3)
             retries += 1
         else:
