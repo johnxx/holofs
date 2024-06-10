@@ -57,7 +57,7 @@ class HoloFS(Fuse):
         self.iroh_author = None
         self.iroh_doc = None
 
-        self.root_key = None
+        self.root_direntry = None
         self.root_node = None
 
         self.last_resync = 0
@@ -136,6 +136,7 @@ class HoloFS(Fuse):
             try:
                 self.root_node = self._load_root()
                 if self.root_node:
+                    self.root_direntry = HoloFS.RootDirEntry(self)
                     break
             except Exception as e:
                 print(traceback.format_exc())
@@ -168,7 +169,7 @@ class HoloFS(Fuse):
 
     def release(self, path, flags, fh):
         self.logger.info(f"release: {path}")
-        fh.release()
+        fh.release(flags)
 
     def fsync(self, path, isfsyncfile, fh):
         self.logger.info(f"fsync: {path}")
@@ -185,7 +186,7 @@ class HoloFS(Fuse):
             direntry = self.root_node.walk(path.split('/'))
             return direntry.node().stat
         except Exception as e:
-            print(traceback.format_exc())
+            # print(traceback.format_exc())
             self.logger.debug("getattr: " + path + ": no such file or directory")
             return -errno.ENOENT
 
@@ -195,8 +196,12 @@ class HoloFS(Fuse):
         try:
             dir_node = self.root_node.walk(path.split('/')).node()
             children = dir_node.children()
-            entries = ['.', '..']
+            entries = [
+                fuse.Direntry('.'),
+                fuse.Direntry('..')
+            ]
             for child in children:
+                self.logger.debug(f"readdir: {child.name}")
                 entries.append(child.to_fuse_direntry())
             return entries
         except Exception as e:
@@ -273,9 +278,10 @@ class HoloFS(Fuse):
 
         parent_path = os.path.dirname(path)
         name = os.path.basename(path)
-        parent_dir = self.walk(parent_path.split('/')).node()
-        if not parent_dir:
+        parent_direntry = self.root_node.walk(parent_path.split('/'))
+        if not parent_direntry:
             return -errno.ENOENT
+        parent_dir = parent_direntry.node()
 
         direntry_exists = parent_dir.child(name)
         if direntry_exists:
@@ -372,6 +378,11 @@ class HoloFS(Fuse):
         def node(self):
             return self._fs.root_node
 
+        def to_fuse_direntry(self):
+            return None
+
+        def unlink(self):
+            pass
 
     class DirEntry(object):
         def __init__(self, fs, key):
@@ -445,11 +456,10 @@ class HoloFS(Fuse):
             self._fs._set_key(self.key, dumps(to_save).encode('utf-8'))
 
     class File(FSNode):
-        def __init__(self, fs, stat, node_uuid=None):
-            super().__init__(fs, stat, node_uuid)
-            self._data_key = f"data/{node_uuid}"
+        def __init__(self, fs, node_stat, node_uuid=None):
+            super().__init__(fs, node_stat, node_uuid)
+            self._data_key = f"data/{self.uuid}"
             self._real_path = os.path.join(self._fs.state_dir, self._data_key)
-            self.data_entry = self._fs._latest_contents(self._data_key)
 
         def _refresh_if_stale(self):
             should_refresh = True
@@ -517,8 +527,8 @@ class HoloFS(Fuse):
             return self.stat
 
     class Dir(FSNode):
-        def __init__(self, fs, stat, node_uuid=None):
-            super().__init__(fs, stat, node_uuid)
+        def __init__(self, fs, node_stat, node_uuid=None):
+            super().__init__(fs, node_stat, node_uuid)
 
         def _child_prefix(self):
             return f"fs/{self.uuid}/"
@@ -545,22 +555,22 @@ class HoloFS(Fuse):
             return HoloFS.DirEntry(self._fs, self._child_direntry_key(name, node_uuid))
 
         def child(self, name):
-            search_key = self._fs._latest_prefix_one(self._child_search_key(name))
-            print(search_key)
-            print(name)
-            return HoloFS.DirEntry(self._fs, search_key)
-
+            entry = self._fs._latest_prefix_one(self._child_search_key(name))
+            if not entry:
+                return None
+            return HoloFS.DirEntry(self._fs, entry.key().decode('utf-8'))
         def children(self):
-            results = self._fs._latest_prefix_many(self._child_prefix())
+            entries = self._fs._latest_prefix_many(self._child_prefix())
             dir_entries = []
-            for r in results:
-                dir_entries.append(HoloFS.DirEntry(self._fs, r))
+            for entry in entries:
+                dir_entries.append(HoloFS.DirEntry(self._fs, entry.key().decode('utf-8')))
             return dir_entries
 
         def walk(self, path):
-            if not path:
-                return self
+            del path[0]
             first_name = path.pop(0)
+            if not first_name:
+                return self._fs.root_direntry
             child_direntry = self.child(first_name)
             if len(path) == 0:
                 return child_direntry
