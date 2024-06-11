@@ -27,9 +27,7 @@ Clone the repository and install the Python dependencies. I recommend creating a
 this should work:
 - `python3 -m venv env`
 - `./env/bin/activate`
-- `pip3 install -r requirements`
-- *Until the next release of the Iroh Python bindings, users will also need to manually build and install the latest 
-version from [here](https://github.com/n0-computer/iroh-ffi?tab=readme-ov-file#python)* 
+- `pip3 install -r requirements.txt`
 
 ### Usage
 
