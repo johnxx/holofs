@@ -27,7 +27,7 @@ Clone the repository and install the Python dependencies. I recommend creating a
 this should work:
 - `python3 -m venv env`
 - `./env/bin/activate`
-- `pip3 install -r requirements`
+- `pip3 install -r requirements.txt`
 
 ### Usage
 
