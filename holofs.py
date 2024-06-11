@@ -191,6 +191,60 @@ class HoloFS(Fuse):
             print(traceback.format_exc())
             return -errno.EIO
 
+    def _prepare_to_link(self, from_path, to_path):
+
+    def symlink(self, from_path, to_path):
+        self.logger.info(f"symlink: {from_path} -> {to_path}")
+
+        from_direntry = self.root_direntry.walk(from_path)
+        if not from_direntry:
+            return -errno.ENOENT
+        from_node = from_direntry.node()
+
+        to_parent_path = os.path.dirname(to_path)
+        to_parent_direntry = self.root_direntry.walk(to_parent_path)
+        if not to_parent_direntry:
+            return -errno.ENOENT
+        to_parent_node = to_parent_direntry.node()
+
+        to_name = os.path.basename(to_path)
+        to_direntry = to_parent_direntry.node().child(to_name)
+        if to_direntry:
+            return -errno.EEXIST
+
+        try:
+            to_direntry = to_parent_node.add_child(to_name, from_node.uuid)
+            to_direntry.persist()
+        except Exception as e:
+            print(traceback.format_exc())
+            return -errno.EIO
+
+    def link(self, from_path, to_path):
+        self.logger.info(f"link: {from_path} -> {to_path}")
+
+        from_direntry = self.root_direntry.walk(from_path)
+        if not from_direntry:
+            return -errno.ENOENT
+        from_node = from_direntry.node()
+
+        to_parent_path = os.path.dirname(to_path)
+        to_parent_direntry = self.root_direntry.walk(to_parent_path)
+        if not to_parent_direntry:
+            return -errno.ENOENT
+        to_parent_node = to_parent_direntry.node()
+
+        to_name = os.path.basename(to_path)
+        to_direntry = to_parent_direntry.node().child(to_name)
+        if to_direntry:
+            return -errno.EEXIST
+
+        try:
+            to_direntry = to_parent_node.add_child(to_name, from_node.uuid)
+            to_direntry.persist()
+        except Exception as e:
+            print(traceback.format_exc())
+            return -errno.EIO
+
     def rename(self, path, path1):
         self.logger.info('rename: ' + path + ' -> ' + path1)
 
@@ -216,7 +270,7 @@ class HoloFS(Fuse):
         try:
             if to_direntry:
                 to_direntry.unlink()
-            to_direntry = to_parent_node.add_child(to_name, from_direntry.node().uuid)
+            to_direntry = to_parent_node.add_child(to_name, from_node.uuid)
             to_direntry.persist()
             from_direntry.unlink()
         except Exception as e:
@@ -236,6 +290,17 @@ class HoloFS(Fuse):
             new_dir = HoloFS.Dir.mkdir(self, mode)
             new_direntry = parent_node.add_child(name, new_dir.uuid)
             new_direntry.persist()
+        except Exception as e:
+            print(traceback.format_exc())
+            return -errno.EIO
+
+    def chmod(self, path, mode):
+        self.logger.info(f"chmod: {path} to {mode}")
+        direntry = self.root_direntry.walk(path)
+        if not direntry:
+            return -errno.ENOENT
+        try:
+            direntry.node().chmod(mode)
         except Exception as e:
             print(traceback.format_exc())
             return -errno.EIO
@@ -454,6 +519,10 @@ class HoloFS(Fuse):
             }
             self._fs.set_key(self.key, dumps(to_save).encode('utf-8'))
 
+        def chmod(self, mode):
+            self.stat.st_mode = mode
+            self.persist()
+
     class File(FSNode):
         def __init__(self, fs, node_stat, node_uuid=None):
             super().__init__(fs, node_stat, node_uuid)
@@ -512,6 +581,9 @@ class HoloFS(Fuse):
                 'st_size': 0
             })
             return cls.make(fs, node_stat)
+
+        @classmethod
+        def symlink(cls):
 
         def open(self, flags):
             self._refresh_if_stale()
