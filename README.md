@@ -28,8 +28,6 @@ this should work:
 - `python3 -m venv env`
 - `./env/bin/activate`
 - `pip3 install -r requirements`
-- *Until the next release of the Iroh Python bindings, users will also need to manually build and install the latest 
-version from [here](https://github.com/n0-computer/iroh-ffi?tab=readme-ov-file#python)* 
 
 ### Usage
 
