@@ -11,7 +11,7 @@ from json import dumps, loads
 import fuse
 import iroh
 from fuse import Fuse
-
+import pydevd_pycharm
 fuse.fuse_python_api = (0, 2)
 
 
@@ -168,7 +168,7 @@ class HoloFS(Fuse):
                 return -errno.ENOENT
             return direntry.node().stat
         except Exception as e:
-            # print(traceback.format_exc())
+            print(traceback.format_exc())
             self.logger.warning(f"getattr: exception loading node")
             self.logger.debug("getattr: " + path + ": no such file or directory")
             return -errno.ENOENT
@@ -191,30 +191,36 @@ class HoloFS(Fuse):
             print(traceback.format_exc())
             return -errno.EIO
 
-    def _prepare_to_link(self, from_path, to_path):
+    def readlink(self, symlink_path):
+        self.logger.info(f"readlink: {symlink_path}")
 
-    def symlink(self, from_path, to_path):
-        self.logger.info(f"symlink: {from_path} -> {to_path}")
-
-        from_direntry = self.root_direntry.walk(from_path)
-        if not from_direntry:
+        symlink_direntry = self.root_direntry.walk(symlink_path)
+        if not symlink_direntry:
             return -errno.ENOENT
-        from_node = from_direntry.node()
-
-        to_parent_path = os.path.dirname(to_path)
-        to_parent_direntry = self.root_direntry.walk(to_parent_path)
-        if not to_parent_direntry:
-            return -errno.ENOENT
-        to_parent_node = to_parent_direntry.node()
-
-        to_name = os.path.basename(to_path)
-        to_direntry = to_parent_direntry.node().child(to_name)
-        if to_direntry:
-            return -errno.EEXIST
+        symlink = symlink_direntry.node()
 
         try:
-            to_direntry = to_parent_node.add_child(to_name, from_node.uuid)
-            to_direntry.persist()
+            return symlink.readlink()
+        except Exception as e:
+            print(traceback.format_exc())
+            return -errno.EIO
+
+    def symlink(self, target, symlink_path):
+        self.logger.info(f"symlink: {target} -> {symlink_path}")
+        pydevd_pycharm.settrace('localhost', port=23234, stdoutToServer=True, stderrToServer=True)
+
+        symlink_parent_path = os.path.dirname(symlink_path)
+        symlink_parent_direntry = self.root_direntry.walk(symlink_parent_path)
+        if not symlink_parent_direntry:
+            return -errno.ENOENT
+        symlink_parent_node = symlink_parent_direntry.node()
+
+        symlink_name = os.path.basename(symlink_path)
+
+        try:
+            symlink = HoloFS.SymLink.symlink(self, target)
+            symlink_direntry = symlink_parent_node.add_child(symlink_name, symlink.uuid)
+            symlink_direntry.persist()
         except Exception as e:
             print(traceback.format_exc())
             return -errno.EIO
@@ -487,6 +493,8 @@ class HoloFS(Fuse):
                 new_node = HoloFS.Dir(fs, node_stat)
             elif stat.S_ISREG(node_stat.st_mode):
                 new_node = HoloFS.File(fs, node_stat)
+            elif stat.S_ISLNK(node_stat.st_mode):
+                new_node = HoloFS.SymLink(fs, node_stat)
             else:
                 node_type = stat.S_IFMT(node_stat.st_mode)
                 raise Exception(f"Unknown node type: {node_type}")
@@ -509,6 +517,8 @@ class HoloFS(Fuse):
                 return HoloFS.Dir(fs, node_stat, node_uuid)
             elif stat.S_ISREG(node_stat.st_mode):
                 return HoloFS.File(fs, node_stat, node_uuid)
+            elif stat.S_ISLNK(node_stat.st_mode):
+                return HoloFS.SymLink(fs, node_stat, node_uuid)
             else:
                 node_type = stat.S_IFMT(node_stat.st_mode)
                 raise Exception(f"Unknown node type: {node_type}")
@@ -580,10 +590,9 @@ class HoloFS(Fuse):
                 'st_gid': os.getgid(),
                 'st_size': 0
             })
-            return cls.make(fs, node_stat)
-
-        @classmethod
-        def symlink(cls):
+            new_file = cls(fs, node_stat)
+            new_file.persist()
+            return new_file
 
         def open(self, flags):
             self._refresh_if_stale()
@@ -597,6 +606,43 @@ class HoloFS(Fuse):
 
         def getattr(self):
             return self.stat
+
+    class SymLink(FSNode):
+        def __init__(self, fs, node_stat, node_uuid=None):
+            super().__init__(fs, node_stat, node_uuid)
+            self._data_key = f"data/{self.uuid}"
+            self._data_entry = None
+            self._target = ''
+
+        @classmethod
+        def symlink(cls, fs, target):
+            node_stat = HoloFS.Stat({
+                'st_mode': 0o0777 | stat.S_IFLNK,
+                'st_dev': 0,
+                'st_nlink': 1,
+                'st_uid': os.getuid(),
+                'st_gid': os.getgid(),
+                'st_size': len(target)
+            })
+            new_symlink = cls(fs, node_stat)
+            new_symlink._target = target
+            new_symlink.persist()
+            return new_symlink
+
+        def persist(self):
+            to_save = {
+                'stat': self.stat.to_dict()
+            }
+            self._fs.set_key(self.key, dumps(to_save).encode('utf-8'))
+            self._fs.set_key(self._data_key, self._target.encode('utf-8'))
+
+        @property
+        def target(self):
+            return self._fs.latest_contents(self._data_key).decode('utf-8')
+        def readlink(self):
+            return self.target
+
+
 
     class Dir(FSNode):
         def __init__(self, fs, node_stat, node_uuid=None):
@@ -621,7 +667,9 @@ class HoloFS(Fuse):
                 'st_gid': os.getgid(),
                 'st_size': 0
             })
-            return cls.make(fs, dir_stat)
+            new_dir = cls(fs, dir_stat)
+            new_dir.persist()
+            return new_dir
 
         def add_child(self, name: str, node_uuid: str):
             return HoloFS.DirEntry(self._fs, self._child_direntry_key(name, node_uuid))
