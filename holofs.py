@@ -11,9 +11,21 @@ from json import dumps, loads
 import fuse
 import iroh
 from fuse import Fuse
+
 import pydevd_pycharm
+
 fuse.fuse_python_api = (0, 2)
 
+def flag2mode(flags):
+    pydevd_pycharm.settrace('localhost', port=23234, stdoutToServer=True, stderrToServer=True)
+    access_mode = flags & os.O_ACCMODE
+    md = {os.O_RDONLY: 'rb', os.O_WRONLY: 'wb', os.O_RDWR: 'wb+'}
+    m = md[access_mode & (os.O_RDONLY | os.O_WRONLY | os.O_RDWR)]
+
+    if access_mode | os.O_APPEND:
+        m = m.replace('w', 'a', 1)
+
+    return m
 
 class HoloFS(Fuse):
     def __init__(self, *args, **kwargs):
@@ -207,7 +219,6 @@ class HoloFS(Fuse):
 
     def symlink(self, target, symlink_path):
         self.logger.info(f"symlink: {target} -> {symlink_path}")
-        pydevd_pycharm.settrace('localhost', port=23234, stdoutToServer=True, stderrToServer=True)
 
         symlink_parent_path = os.path.dirname(symlink_path)
         symlink_parent_direntry = self.root_direntry.walk(symlink_parent_path)
@@ -315,7 +326,8 @@ class HoloFS(Fuse):
         self.logger.warning("utime: unimplemented")
 
     def create(self, path, flags, mode):
-        self.logger.info("create: " + path)
+        self.logger.info(f"create: {path} (flags: {flags}, mode: {mode})")
+        # pydevd_pycharm.settrace('localhost', port=23234, stdoutToServer=True, stderrToServer=True)
 
         parent_path = os.path.dirname(path)
         name = os.path.basename(path)
@@ -331,20 +343,23 @@ class HoloFS(Fuse):
 
         try:
             new_file = HoloFS.File.mknod(self, mode, 0)
+            # flags = flags & -os.O_CREAT
+            # flags = flags & -os.O_EXCL
             new_direntry = parent_dir.add_child(name, new_file.uuid)
             new_direntry.persist()
-            return new_file.open(flags)
+            return new_file.open(flags, mode)
         except Exception as e:
             print(traceback.format_exc())
             return -errno.EIO
 
     def open(self, path, flags):
-        self.logger.info("open: " + path)
+        self.logger.info(f"open: {path} (flags: {flags}")
+        # pydevd_pycharm.settrace('localhost', port=23234, stdoutToServer=True, stderrToServer=True)
         direntry = self.root_direntry.walk(path)
         if not direntry:
             return -errno.ENOENT
 
-        return direntry.node().open(flags)
+        return direntry.node().open(flags, 0)
 
     def resync_if_stale(self):
         current_time = time.monotonic()
@@ -402,6 +417,7 @@ class HoloFS(Fuse):
 
     def write(self, path, buf, offset, fh):
         self.logger.info("write: " + path + " " + str(len(buf)) + "@" + str(offset))
+        # pydevd_pycharm.settrace('localhost', port=23234, stdoutToServer=True, stderrToServer=True)
         try:
             return fh.write(buf, offset)
         except Exception as e:
@@ -594,9 +610,9 @@ class HoloFS(Fuse):
             new_file.persist()
             return new_file
 
-        def open(self, flags):
+        def open(self, flags, mode):
             self._refresh_if_stale()
-            return HoloFS.FileHandle(self, flags)
+            return HoloFS.FileHandle(self, flags, mode)
 
         def truncate(self, length):
             if length > 0:
@@ -688,13 +704,14 @@ class HoloFS(Fuse):
             return dir_entries
 
     class FileHandle(object):
-        def __init__(self, fsnode, flags):
+        def __init__(self, fsnode, flags, mode):
+            # pydevd_pycharm.settrace('localhost', port=23234, stdoutToServer=True, stderrToServer=True)
             self.node = fsnode
-            self.file = os.fdopen(os.open(fsnode._real_path, flags))
+            self.file = os.fdopen(os.open(fsnode._real_path, flags, mode), flag2mode(flags))
             self.fd = self.file.fileno()
 
         def read(self, length, offset):
-            self.node._refresh_if_stale()
+            #self.node._refresh_if_stale()
             return os.pread(self.fd, length, offset)
 
         def ftruncate(self, length):
