@@ -12,12 +12,12 @@ import fuse
 import iroh
 from fuse import Fuse
 
-import pydevd_pycharm
+# import pydevd_pycharm
 
 fuse.fuse_python_api = (0, 2)
 
 def flag2mode(flags):
-    pydevd_pycharm.settrace('localhost', port=23234, stdoutToServer=True, stderrToServer=True)
+    # pydevd_pycharm.settrace('localhost', port=23234, stdoutToServer=True, stderrToServer=True)
     access_mode = flags & os.O_ACCMODE
     md = {os.O_RDONLY: 'rb', os.O_WRONLY: 'wb', os.O_RDWR: 'wb+'}
     m = md[access_mode & (os.O_RDONLY | os.O_WRONLY | os.O_RDWR)]
@@ -46,9 +46,9 @@ class HoloFS(Fuse):
         super(HoloFS, self).__init__(*args, **kwargs)
 
         # Debug logging
-        log_level = logging.DEBUG
+        # log_level = logging.DEBUG
         # log_level = logging.INFO
-        # log_level = logging.WARNING
+        log_level = logging.WARNING
         self.logger = self._setup_logging(log_level)
 
         self.queue = queue.Queue()
@@ -343,8 +343,8 @@ class HoloFS(Fuse):
 
         try:
             new_file = HoloFS.File.mknod(self, mode, 0)
-            # flags = flags & -os.O_CREAT
-            # flags = flags & -os.O_EXCL
+            flags = flags & ~os.O_CREAT
+            flags = flags & ~os.O_EXCL
             new_direntry = parent_dir.add_child(name, new_file.uuid)
             new_direntry.persist()
             return new_file.open(flags, mode)
@@ -426,7 +426,7 @@ class HoloFS(Fuse):
 
     class WalkableDirEntry(object):
         def walk(self, path):
-            if type(path) == str:
+            if path is str:
                 path = list(filter(None, path.removeprefix('/').split('/')))
             self._fs.logger.debug(f"walk: {path}")
             if len(path) == 0:
@@ -469,7 +469,7 @@ class HoloFS(Fuse):
 
     class Stat(fuse.Stat):
         def __init__(self, *initial_data, **kwargs):
-
+            super().__init__()
             self.st_mode = 0
             self.st_ino = 0
             self.st_dev = 0
@@ -581,7 +581,7 @@ class HoloFS(Fuse):
                 self._fs.iroh_doc.export_file(data_entry, self._real_path, None)
             os.utime(self._real_path, (self.stat.st_atime, self.stat.st_mtime))
 
-        def _commit(self):
+        def commit(self):
             real_stat = os.stat(self._real_path)
             real_size = real_stat.st_size
             if self._data_entry and real_size == 0:
@@ -618,7 +618,7 @@ class HoloFS(Fuse):
             if length > 0:
                 self._refresh_if_stale()
             os.truncate(self._real_path, length)
-            self._commit()
+            self.commit()
 
         def getattr(self):
             return self.stat
@@ -655,10 +655,9 @@ class HoloFS(Fuse):
         @property
         def target(self):
             return self._fs.latest_contents(self._data_key).decode('utf-8')
+
         def readlink(self):
             return self.target
-
-
 
     class Dir(FSNode):
         def __init__(self, fs, node_stat, node_uuid=None):
@@ -717,22 +716,22 @@ class HoloFS(Fuse):
         def ftruncate(self, length):
             self.node._refresh_if_stale()
             os.truncate(self.node._real_path, length)
-            self.node._commit()
+            self.node.commit()
 
         def write(self, buf, offset):
             return os.pwrite(self.fd, buf, offset)
 
         def release(self, flags):
             self.file.close()
-            self.node._commit()
+            self.node.commit()
 
         def fsync(self, issyncfile):
             os.fsync(self.fd)
-            self.node._commit()
+            self.node.commit()
 
         def flush(self):
             os.fsync(self.fd)
-            self.node._commit()
+            self.node.commit()
 
         def fgetattr(self):
             return self.node.stat
