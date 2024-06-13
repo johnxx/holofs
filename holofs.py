@@ -12,12 +12,9 @@ import fuse
 import iroh
 from fuse import Fuse
 
-import pydevd_pycharm
-
 fuse.fuse_python_api = (0, 2)
 
 def flag2mode(flags):
-    # pydevd_pycharm.settrace('localhost', port=23234, stdoutToServer=True, stderrToServer=True)
     access_mode = flags & os.O_ACCMODE
     md = {os.O_RDONLY: 'rb', os.O_WRONLY: 'wb', os.O_RDWR: 'wb+'}
     m = md[access_mode & (os.O_RDONLY | os.O_WRONLY | os.O_RDWR)]
@@ -161,11 +158,9 @@ class HoloFS(Fuse):
     def release(self, path, flags, fh):
         # @TODO: Guess this isn't quite right?
         self.logger.info(f"release: {path}")
-        # pydevd_pycharm.settrace('localhost', port=23234, stdoutToServer=True, stderrToServer=True)
         try:
             fh.release()
             self.logger.info(f"closed: {path}")
-            # pydevd_pycharm.settrace('localhost', port=23234, stdoutToServer=True, stderrToServer=True)
         except Exception as e:
             print(traceback.format_exc())
             return -errno.EIO
@@ -193,6 +188,18 @@ class HoloFS(Fuse):
             self.logger.warning(f"getattr: exception loading node")
             self.logger.debug("getattr: " + path + ": no such file or directory")
             return -errno.ENOENT
+
+    def rmdir(self, path):
+        self.logger.debug(f"rmdir: {path}")
+        self.resync_if_stale()
+        direntry = self.root_direntry.walk(path)
+        if not direntry:
+            return -errno.ENOENT
+        try:
+            direntry.unlink()
+        except Exception as e:
+            print(traceback.format_exc())
+            return -errno.EIO
 
     def readdir(self, path, offset):
         self.logger.debug("readdir: " + path)
@@ -344,7 +351,6 @@ class HoloFS(Fuse):
 
     def create(self, path, flags, mode):
         self.logger.info(f"create: {path} (flags: {flags}, mode: {mode})")
-        # pydevd_pycharm.settrace('localhost', port=23234, stdoutToServer=True, stderrToServer=True)
 
         parent_path = os.path.dirname(path)
         name = os.path.basename(path)
@@ -371,7 +377,6 @@ class HoloFS(Fuse):
 
     def open(self, path, flags):
         self.logger.info(f"open: {path} (flags: {flags})")
-        # pydevd_pycharm.settrace('localhost', port=23234, stdoutToServer=True, stderrToServer=True)
         direntry = self.root_direntry.walk(path)
         if not direntry:
             return -errno.ENOENT
@@ -434,7 +439,6 @@ class HoloFS(Fuse):
 
     def write(self, path, buf, offset, fh):
         self.logger.info("write: " + path + " " + str(len(buf)) + "@" + str(offset))
-        # pydevd_pycharm.settrace('localhost', port=23234, stdoutToServer=True, stderrToServer=True)
         try:
             return fh.write(buf, offset)
         except Exception as e:
@@ -726,7 +730,6 @@ class HoloFS(Fuse):
 
     class FileHandle(object):
         def __init__(self, fsnode, flags, mode):
-            # pydevd_pycharm.settrace('localhost', port=23234, stdoutToServer=True, stderrToServer=True)
             self.node = fsnode
             self.file = os.fdopen(os.open(fsnode._real_path, flags, mode), flag2mode(flags))
             self.fd = self.file.fileno()
