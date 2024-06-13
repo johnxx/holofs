@@ -12,7 +12,7 @@ import fuse
 import iroh
 from fuse import Fuse
 
-# import pydevd_pycharm
+import pydevd_pycharm
 
 fuse.fuse_python_api = (0, 2)
 
@@ -46,9 +46,9 @@ class HoloFS(Fuse):
         super(HoloFS, self).__init__(*args, **kwargs)
 
         # Debug logging
-        # log_level = logging.DEBUG
+        log_level = logging.DEBUG
         # log_level = logging.INFO
-        log_level = logging.WARNING
+        # log_level = logging.WARNING
         self.logger = self._setup_logging(log_level)
 
         self.queue = queue.Queue()
@@ -159,8 +159,17 @@ class HoloFS(Fuse):
         return self.iroh_doc.get_one(query)
 
     def release(self, path, flags, fh):
+        # @TODO: Guess this isn't quite right?
         self.logger.info(f"release: {path}")
-        fh.release(flags)
+        pydevd_pycharm.settrace('localhost', port=23234, stdoutToServer=True, stderrToServer=True)
+        try:
+            fh.release()
+            self.logger.info(f"closed: {path}")
+            # pydevd_pycharm.settrace('localhost', port=23234, stdoutToServer=True, stderrToServer=True)
+        except Exception as e:
+            print(traceback.format_exc())
+            return -errno.EIO
+        return 0
 
     def fsync(self, path, isfsyncfile, fh):
         self.logger.info(f"fsync: {path}")
@@ -323,6 +332,7 @@ class HoloFS(Fuse):
             return -errno.EIO
 
     def utime(self, path, times):
+        # @TODO: Implement this
         self.logger.warning("utime: unimplemented")
 
     def create(self, path, flags, mode):
@@ -353,7 +363,7 @@ class HoloFS(Fuse):
             return -errno.EIO
 
     def open(self, path, flags):
-        self.logger.info(f"open: {path} (flags: {flags}")
+        self.logger.info(f"open: {path} (flags: {flags})")
         # pydevd_pycharm.settrace('localhost', port=23234, stdoutToServer=True, stderrToServer=True)
         direntry = self.root_direntry.walk(path)
         if not direntry:
@@ -426,7 +436,7 @@ class HoloFS(Fuse):
 
     class WalkableDirEntry(object):
         def walk(self, path):
-            if path is str:
+            if type(path) is str:
                 path = list(filter(None, path.removeprefix('/').split('/')))
             self._fs.logger.debug(f"walk: {path}")
             if len(path) == 0:
@@ -721,7 +731,7 @@ class HoloFS(Fuse):
         def write(self, buf, offset):
             return os.pwrite(self.fd, buf, offset)
 
-        def release(self, flags):
+        def release(self):
             self.file.close()
             self.node.commit()
 
