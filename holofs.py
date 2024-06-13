@@ -161,7 +161,7 @@ class HoloFS(Fuse):
     def release(self, path, flags, fh):
         # @TODO: Guess this isn't quite right?
         self.logger.info(f"release: {path}")
-        pydevd_pycharm.settrace('localhost', port=23234, stdoutToServer=True, stderrToServer=True)
+        # pydevd_pycharm.settrace('localhost', port=23234, stdoutToServer=True, stderrToServer=True)
         try:
             fh.release()
             self.logger.info(f"closed: {path}")
@@ -173,7 +173,7 @@ class HoloFS(Fuse):
 
     def fsync(self, path, isfsyncfile, fh):
         self.logger.info(f"fsync: {path}")
-        fh.release()
+        fh.flush()
 
     def flush(self, path, fh):
         self.logger.info(f"flush: {path}")
@@ -332,8 +332,15 @@ class HoloFS(Fuse):
             return -errno.EIO
 
     def utime(self, path, times):
-        # @TODO: Implement this
-        self.logger.warning("utime: unimplemented")
+        self.logger.info(f"utime: {path} to {times}")
+        direntry = self.root_direntry.walk(path)
+        if not direntry:
+            return -errno.ENOENT
+        try:
+            direntry.node().utime(times)
+        except Exception as e:
+            print(traceback.format_exc())
+            return -errno.EIO
 
     def create(self, path, flags, mode):
         self.logger.info(f"create: {path} (flags: {flags}, mode: {mode})")
@@ -557,6 +564,11 @@ class HoloFS(Fuse):
 
         def chmod(self, mode):
             self.stat.st_mode = mode
+            self.persist()
+
+        def utime(self, times):
+            self.stat.st_atime = times[0]
+            self.stat.st_mtime = times[1]
             self.persist()
 
     class File(FSNode):
