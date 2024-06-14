@@ -106,7 +106,7 @@ class HoloFS(Fuse):
         doc.set_bytes(author, b'root_uuid', root_dir.uuid.encode('utf-8'))
 
     def on_change(self):
-        self.resync_if_stale()
+        self.resync()
 
     def main(self, *args, **kwargs):
         print("Loading the filesystem...")
