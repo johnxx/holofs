@@ -593,6 +593,8 @@ class HoloFS(Fuse):
         def _refresh_if_stale(self):
             should_refresh = True
             try:
+                contents = loads(self._fs.latest_contents(self.key))
+                self.stat = HoloFS.Stat(contents.get('stat'))
                 real_stat = os.stat(self._real_path)
                 if real_stat.st_mtime >= self.stat.st_mtime:
                     should_refresh = False

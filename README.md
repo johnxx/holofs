@@ -4,8 +4,8 @@
 ### Status
 ⚠️️⚠️️⚠️️ HoloFS is pre-alpha software released as a proof of concept ⚠️️⚠️️⚠️️
 
-In its current iteration HoloFS is closer to a toy than it is a prototype: Error checking is lax, corner cases are
-poorly understood and even the ones that are understood aren't managed for the most part. That said, it does kinda work
+In its current iteration HoloFS is just about starting to look like a prototype: Error checking is ... present, corner cases are
+somewhat understood and even the that are understood starting to be handled. That said, it does work to some extent
 and I'm very interested in feedback about the direction, the features people are interested in and the use-cases that 
 come to mind. I'm also interested in bug reports, but please realize this is very much a side project for me and 
 progress may be quite sporadic. PRs are always welcome!
