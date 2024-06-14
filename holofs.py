@@ -68,8 +68,10 @@ class HoloFS(Fuse):
         elif t == iroh.LiveEventType.INSERT_REMOTE:
             insert_remove_event = e.as_insert_remote()
             self.resync_if_stale()
+            key = insert_remove_event.entry.key().decode('utf-8')
+            content_hash = insert_remove_event.entry.content_hash().to_string()
             self.logger.info(
-                f"LiveEvent - InsertRemote:\n\tfrom: {insert_remove_event._from}\n\tentry hash:\n\t{insert_remove_event.entry.content_hash().to_string()}\n\tcontent_status: {insert_remove_event.content_status}")
+                f"LiveEvent - InsertRemote:\n\tfrom: {insert_remove_event._from}\n\tentry_key: {key}\n\tentry hash: {content_hash}\n\tcontent_status: {insert_remove_event.content_status}")
         elif t == iroh.LiveEventType.CONTENT_READY:
             hash_val = e.as_content_ready()
             self.logger.info(f"LiveEvent - ContentReady: hash {hash_val.to_string()}")
@@ -102,6 +104,9 @@ class HoloFS(Fuse):
         root_dir = HoloFS.Dir.mkdir(self, 0o755)
         root_dir.persist()
         doc.set_bytes(author, b'root_uuid', root_dir.uuid.encode('utf-8'))
+
+    def on_change(self):
+        self.resync_if_stale()
 
     def main(self, *args, **kwargs):
         print("Loading the filesystem...")
@@ -479,6 +484,7 @@ class HoloFS(Fuse):
 
         def persist(self):
             self._fs.set_key(self.key, b'\x00')
+            self._fs.on_change()
 
         def node(self):
             return HoloFS.FSNode.load(self._fs, self.node_uuid)
@@ -566,6 +572,7 @@ class HoloFS(Fuse):
                 'stat': self.stat.to_dict()
             }
             self._fs.set_key(self.key, dumps(to_save).encode('utf-8'))
+            self._fs.on_change()
 
         def chmod(self, mode):
             self.stat.st_mode = mode
@@ -678,6 +685,7 @@ class HoloFS(Fuse):
             }
             self._fs.set_key(self.key, dumps(to_save).encode('utf-8'))
             self._fs.set_key(self._data_key, self._target.encode('utf-8'))
+            self._fs.on_change()
 
         @property
         def target(self):
