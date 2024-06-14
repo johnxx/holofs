@@ -744,7 +744,7 @@ class HoloFS(Fuse):
             self.fd = self.file.fileno()
 
         def read(self, length, offset):
-            #self.node._refresh_if_stale()
+            self.node._refresh_if_stale()
             return os.pread(self.fd, length, offset)
 
         def ftruncate(self, length):
