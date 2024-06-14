@@ -67,6 +67,7 @@ class HoloFS(Fuse):
             self.logger.info(f"LiveEvent - InsertLocal: entry hash {entry.content_hash().to_string()}")
         elif t == iroh.LiveEventType.INSERT_REMOTE:
             insert_remove_event = e.as_insert_remote()
+            self.resync_if_stale()
             self.logger.info(
                 f"LiveEvent - InsertRemote:\n\tfrom: {insert_remove_event._from}\n\tentry hash:\n\t{insert_remove_event.entry.content_hash().to_string()}\n\tcontent_status: {insert_remove_event.content_status}")
         elif t == iroh.LiveEventType.CONTENT_READY:
