@@ -602,6 +602,7 @@ class HoloFS(Fuse):
                 return self._refresh()
 
         def _refresh(self):
+            self.logger.debug(f"_refresh: {self.key} (data: {self._data_key})")
             self._fs.resync_if_stale()
             try:
                 os.mknod(self._real_path, mode=0o600 | stat.S_IFREG)
