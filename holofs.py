@@ -13,7 +13,7 @@ import fuse
 import iroh
 from fuse import Fuse
 
-#import pydevd_pycharm
+# import pydevd_pycharm
 
 fuse.fuse_python_api = (0, 2)
 
@@ -36,7 +36,6 @@ class HoloFS(Fuse):
         self.iroh_doc = None
 
         self.crdt_doc = None
-        self.crdt_fs = None
 
         self.root_direntry = None
         self.root_node = None
@@ -102,8 +101,6 @@ class HoloFS(Fuse):
         self.iroh_doc = doc
 
         self.crdt_doc = pycrdt.Doc()
-        self.crdt_fs = pycrdt.Map()
-        self.crdt_doc['fs'] = self.crdt_fs
 
         self.iroh_doc.subscribe(self)
 
@@ -111,10 +108,10 @@ class HoloFS(Fuse):
 
     def makefs(self):
         print("Initializing filesystem...")
-        self.crdt_doc['fs'] = self.crdt_fs
+        self.crdt_doc['fs'] = pycrdt.Map()
         root_dir = HoloFS.Dir.mkdir(self, 0o755)
         root_dir.persist()
-        self.crdt_fs['root_uuid'] = root_dir.uuid.encode('utf-8')
+        self.crdt_doc['fs']['root_uuid'] = root_dir.uuid.encode('utf-8')
         self.iroh_doc.set_bytes(author, b'updates', self.crdt_doc.get_update())
 
     def on_change(self):
@@ -128,7 +125,6 @@ class HoloFS(Fuse):
 
         while retries < max_retries:
             try:
-                self._load_fs_crdt()
                 self.root_node = self._load_root()
                 if self.root_node:
                     self.root_direntry = HoloFS.RootDirEntry(self)
@@ -146,18 +142,18 @@ class HoloFS(Fuse):
         self.logger.debug("entered: Fuse.main()")
         return Fuse.main(self, *args, **kwargs)
 
-    def _load_fs_crdt(self):
-        key = 'updates'
-        self.logger.debug("iroh load: " + key)
-        entries = self.iroh_key_all_authors(key)
-        self.crdt_doc = pycrdt.Doc()
-        for entry in entries:
-            update = entry.content_bytes(self.iroh_doc)
-            self.crdt_doc.apply_update(update)
-        return self.crdt_doc['fs']
+    # def _load_fs_crdt(self):
+    #     key = 'updates'
+    #     self.logger.debug("iroh load: " + key)
+    #     entries = self.iroh_key_all_authors(key)
+    #     self.crdt_doc = pycrdt.Doc()
+    #     for entry in entries:
+    #         self.logger.debug("Applying update.")
+    #         update = entry.content_bytes(self.iroh_doc)
+    #         self.crdt_doc.apply_update(update)
+    #     return self.crdt_doc['fs']
 
     def _load_root(self):
-        # pydevd_pycharm.settrace('localhost', port=23234, stdoutToServer=True, stderrToServer=True, suspend=False)
         key = 'root_uuid'
         self.logger.debug("load: " + key)
         root_uuid = self.latest_contents(key).decode('utf-8')
@@ -170,16 +166,24 @@ class HoloFS(Fuse):
         return self.iroh_latest_key_one(key).content_bytes(self.iroh_doc)
 
     def latest_contents(self, key):
-        return self.crdt_fs[key]
+        return self.crdt_doc['fs'][key]
 
     def set_key(self, key, contents):
-        self.crdt_fs[key] = contents
+        content_length = len(contents)
+        self.logger.debug(f"set key: {key} (length: {content_length})")
+        self.crdt_doc['fs'][key] = contents
 
     def iroh_set_key(self, key, contents):
+        content_length = len(contents)
+        self.logger.debug(f"set key: {key} (length: {content_length})")
         return self.iroh_doc.set_bytes(self.iroh_author, key.encode('utf-8'), contents)
 
     def latest_prefix_many(self, prefix):
-        return {k: v for k, v in self.crdt_fs.items() if k.startswith(prefix)}
+        self.logger.debug("query latest entries matching prefix: %s" % prefix)
+        self.logger.debug(f"keys:")
+        for k in self.crdt_doc['fs'].keys():
+            self.logger.debug(f"       {k}")
+        return {k: v for k, v in self.crdt_doc['fs'].items() if k.startswith(prefix)}
 
     def iroh_latest_prefix_many(self, prefix):
         self.logger.debug("query latest entries matching prefix: %s" % prefix)
@@ -187,7 +191,7 @@ class HoloFS(Fuse):
         return self.iroh_doc.get_many(query)
 
     def latest_prefix_one(self, prefix):
-        for k, v in self.crdt_fs.items():
+        for k, v in self.crdt_doc['fs'].items():
             if k.startswith(prefix):
                 return k, v
         return None, None
@@ -198,7 +202,7 @@ class HoloFS(Fuse):
         return self.iroh_doc.get_one(query)
 
     def latest_key_one(self, key):
-        v = self.crdt_fs.get(key, None)
+        v = self.crdt_doc['fs'].get(key, None)
         if not v:
             return None, None
         return key, v
@@ -452,6 +456,7 @@ class HoloFS(Fuse):
             self.resync()
 
     def resync(self):
+        # pydevd_pycharm.settrace('localhost', port=23234, stdoutToServer=True, stderrToServer=True, suspend=False)
         conns = iroh_node.connections()
         node_addrs = []
         self.logger.debug("open connections: ")
@@ -462,10 +467,13 @@ class HoloFS(Fuse):
             node_addrs.append(iroh.NodeAddr(node_id=conn.node_id, relay_url=conn.relay_url, addresses=addrs))
             self.logger.debug("     " + conn.node_id.fmt_short())
         self.iroh_doc.start_sync(node_addrs)
+        self.logger.debug("Applying updates:")
         for update_entry in self.iroh_key_all_authors('updates'):
             if update_entry:
                 update = update_entry.content_bytes(self.iroh_doc)
                 self.crdt_doc.apply_update(update)
+                self.logger.debug(f"     update applied!")
+        self.crdt_doc['fs'] = pycrdt.Map()
         self.last_resync = time.monotonic()
 
     def unlink(self, path):
