@@ -1,6 +1,7 @@
 import errno
 import logging
 import os
+import pycrdt
 import queue
 import stat
 import time
@@ -11,6 +12,8 @@ from json import dumps, loads
 import fuse
 import iroh
 from fuse import Fuse
+
+#import pydevd_pycharm
 
 fuse.fuse_python_api = (0, 2)
 
@@ -31,6 +34,9 @@ class HoloFS(Fuse):
         self.iroh_node = None
         self.iroh_author = None
         self.iroh_doc = None
+
+        self.crdt_doc = None
+        self.crdt_fs = None
 
         self.root_direntry = None
         self.root_node = None
@@ -95,17 +101,24 @@ class HoloFS(Fuse):
         self.iroh_author = author
         self.iroh_doc = doc
 
+        self.crdt_doc = pycrdt.Doc()
+        self.crdt_fs = pycrdt.Map()
+        self.crdt_doc['fs'] = self.crdt_fs
+
         self.iroh_doc.subscribe(self)
 
         self.resync()
 
     def makefs(self):
         print("Initializing filesystem...")
+        self.crdt_doc['fs'] = self.crdt_fs
         root_dir = HoloFS.Dir.mkdir(self, 0o755)
         root_dir.persist()
-        doc.set_bytes(author, b'root_uuid', root_dir.uuid.encode('utf-8'))
+        self.crdt_fs['root_uuid'] = root_dir.uuid.encode('utf-8')
+        self.iroh_doc.set_bytes(author, b'updates', self.crdt_doc.get_update())
 
     def on_change(self):
+        self._sync_fs()
         self.resync()
 
     def main(self, *args, **kwargs):
@@ -115,11 +128,13 @@ class HoloFS(Fuse):
 
         while retries < max_retries:
             try:
+                self._load_fs_crdt()
                 self.root_node = self._load_root()
                 if self.root_node:
                     self.root_direntry = HoloFS.RootDirEntry(self)
                     break
             except Exception as e:
+                print(traceback.format_exc())
                 print("Trying %s more times to load the filesystem" % (max_retries - retries))
             self.resync()
             time.sleep(3)
@@ -131,7 +146,18 @@ class HoloFS(Fuse):
         self.logger.debug("entered: Fuse.main()")
         return Fuse.main(self, *args, **kwargs)
 
+    def _load_fs_crdt(self):
+        key = 'updates'
+        self.logger.debug("iroh load: " + key)
+        entries = self.iroh_key_all_authors(key)
+        self.crdt_doc = pycrdt.Doc()
+        for entry in entries:
+            update = entry.content_bytes(self.iroh_doc)
+            self.crdt_doc.apply_update(update)
+        return self.crdt_doc['fs']
+
     def _load_root(self):
+        # pydevd_pycharm.settrace('localhost', port=23234, stdoutToServer=True, stderrToServer=True, suspend=False)
         key = 'root_uuid'
         self.logger.debug("load: " + key)
         root_uuid = self.latest_contents(key).decode('utf-8')
@@ -140,26 +166,52 @@ class HoloFS(Fuse):
             raise Exception("Root node must be a directory!")
         return root_node
 
+    def iroh_latest_contents(self, key):
+        return self.iroh_latest_key_one(key).content_bytes(self.iroh_doc)
+
     def latest_contents(self, key):
-        return self.latest_key_one(key).content_bytes(self.iroh_doc)
+        return self.crdt_fs[key]
 
     def set_key(self, key, contents):
+        self.crdt_fs[key] = contents
+
+    def iroh_set_key(self, key, contents):
         return self.iroh_doc.set_bytes(self.iroh_author, key.encode('utf-8'), contents)
 
     def latest_prefix_many(self, prefix):
+        return {k: v for k, v in self.crdt_fs.items() if k.startswith(prefix)}
+
+    def iroh_latest_prefix_many(self, prefix):
         self.logger.debug("query latest entries matching prefix: %s" % prefix)
         query = iroh.Query.single_latest_per_key_prefix(prefix.encode('utf-8'), None)
         return self.iroh_doc.get_many(query)
 
     def latest_prefix_one(self, prefix):
+        for k, v in self.crdt_fs.items():
+            if k.startswith(prefix):
+                return k, v
+        return None, None
+
+    def iroh_latest_prefix_one(self, prefix):
         self.logger.debug("query latest one entry matching prefix: %s" % prefix)
         query = iroh.Query.single_latest_per_key_prefix(prefix.encode('utf-8'), None)
         return self.iroh_doc.get_one(query)
 
     def latest_key_one(self, key):
+        v = self.crdt_fs.get(key, None)
+        if not v:
+            return None, None
+        return key, v
+
+    def iroh_latest_key_one(self, key):
         self.logger.debug("query latest entry for key: %s" % key)
         query = iroh.Query.single_latest_per_key_exact(key.encode('utf-8'))
         return self.iroh_doc.get_one(query)
+
+    def iroh_key_all_authors(self, key):
+        self.logger.debug(f"query latest entry for all authors for key: {key}")
+        query = iroh.Query.key_exact(key.encode('utf-8'), None)
+        return self.iroh_doc.get_many(query)
 
     def release(self, path, flags, fh):
         # @TODO: Guess this isn't quite right?
@@ -171,6 +223,11 @@ class HoloFS(Fuse):
             print(traceback.format_exc())
             return -errno.EIO
         return 0
+
+    def _sync_fs(self):
+        self.logger.info("syncing...")
+        self.iroh_set_key('updates', self.crdt_doc.get_update())
+        self.logger.info("synced!")
 
     def fsync(self, path, isfsyncfile, fh):
         self.logger.info(f"fsync: {path}")
@@ -405,6 +462,10 @@ class HoloFS(Fuse):
             node_addrs.append(iroh.NodeAddr(node_id=conn.node_id, relay_url=conn.relay_url, addresses=addrs))
             self.logger.debug("     " + conn.node_id.fmt_short())
         self.iroh_doc.start_sync(node_addrs)
+        for update_entry in self.iroh_key_all_authors('updates'):
+            if update_entry:
+                update = update_entry.content_bytes(self.iroh_doc)
+                self.crdt_doc.apply_update(update)
         self.last_resync = time.monotonic()
 
     def unlink(self, path):
@@ -519,52 +580,52 @@ class HoloFS(Fuse):
             return vars(self)
 
     class FSNode(object):
-        def __init__(self, fs, node_stat, node_uuid=None):
+        def __init__(self, fs, node_contents, node_uuid=None):
             self._fs = fs
             if not node_uuid:
                 node_uuid = str(uuid.uuid4())
             self.uuid = node_uuid
             self.key = self.node_key(node_uuid)
-            self.stat = node_stat
+            self.stat = node_contents['stat']
 
         @classmethod
         def node_key(cls, node_uuid):
             return f"stat/{node_uuid}.json"
 
-        @classmethod
-        def make(cls, fs, node_stat):
-            if stat.S_ISDIR(node_stat.st_mode):
-                new_node = HoloFS.Dir(fs, node_stat)
-            elif stat.S_ISREG(node_stat.st_mode):
-                new_node = HoloFS.File(fs, node_stat)
-            elif stat.S_ISLNK(node_stat.st_mode):
-                new_node = HoloFS.SymLink(fs, node_stat)
-            else:
-                node_type = stat.S_IFMT(node_stat.st_mode)
-                raise Exception(f"Unknown node type: {node_type}")
+        # @classmethod
+        # def make(cls, fs, node_stat):
+        #     if stat.S_ISDIR(node_stat.st_mode):
+        #         new_node = HoloFS.Dir(fs, node_stat)
+        #     elif stat.S_ISREG(node_stat.st_mode):
+        #         new_node = HoloFS.File(fs, node_stat)
+        #     elif stat.S_ISLNK(node_stat.st_mode):
+        #         new_node = HoloFS.SymLink(fs, node_stat)
+        #     else:
+        #         node_type = stat.S_IFMT(node_stat.st_mode)
+        #         raise Exception(f"Unknown node type: {node_type}")
 
-            try:
-                new_node.persist()
-                return new_node
-            except Exception as e:
-                print(traceback.format_exc())
-                return -errno.EIO
+        #     try:
+        #         new_node.persist()
+        #         return new_node
+        #     except Exception as e:
+        #         print(traceback.format_exc())
+        #         return -errno.EIO
 
         @classmethod
         def load(cls, fs, node_uuid):
             node_key = cls.node_key(node_uuid)
             # @TODO: This is where we'll handle policies that tell us which version of the node entry to load
             contents = loads(fs.latest_contents(node_key))
-            node_stat = HoloFS.Stat(contents.get('stat'))
+            contents['stat'] = HoloFS.Stat(contents.get('stat'))
 
-            if stat.S_ISDIR(node_stat.st_mode):
-                return HoloFS.Dir(fs, node_stat, node_uuid)
-            elif stat.S_ISREG(node_stat.st_mode):
-                return HoloFS.File(fs, node_stat, node_uuid)
-            elif stat.S_ISLNK(node_stat.st_mode):
-                return HoloFS.SymLink(fs, node_stat, node_uuid)
+            if stat.S_ISDIR(contents['stat'].st_mode):
+                return HoloFS.Dir(fs, contents, node_uuid)
+            elif stat.S_ISREG(contents['stat'].st_mode):
+                return HoloFS.File(fs, contents, node_uuid)
+            elif stat.S_ISLNK(contents['stat'].st_mode):
+                return HoloFS.SymLink(fs, contents, node_uuid)
             else:
-                node_type = stat.S_IFMT(node_stat.st_mode)
+                node_type = stat.S_IFMT(contents['stat'].st_mode)
                 raise Exception(f"Unknown node type: {node_type}")
 
         def persist(self):
@@ -584,11 +645,18 @@ class HoloFS(Fuse):
             self.persist()
 
     class File(FSNode):
-        def __init__(self, fs, node_stat, node_uuid=None):
-            super().__init__(fs, node_stat, node_uuid)
-            self._data_key = f"data/{self.uuid}"
-            self._real_path = os.path.join(self._fs.state_dir, self._data_key)
+        def __init__(self, fs, node_contents, node_uuid=None):
+            super().__init__(fs, node_contents, node_uuid)
+            self._data_uuid = str(uuid.uuid4())
             self._data_entry = None
+
+        @property
+        def _data_key(self):
+            return f"data/{self._data_uuid}"
+
+        @property
+        def _real_path(self):
+            return os.path.join(self._fs.state_dir, f"data/{self.uuid}")
 
         def _refresh_if_stale(self):
             should_refresh = True
@@ -614,13 +682,42 @@ class HoloFS(Fuse):
             if self.stat.st_size == 0:
                 os.truncate(self._real_path, 0)
             else:
-                data_entry = self._fs.latest_key_one(self._data_key)
-                self._fs.iroh_doc.export_file(data_entry, self._real_path, None)
+                self._data_entry = self._fs.latest_key_one(self._data_key)
+                self._fs.iroh_doc.export_file(self._data_entry, self._real_path, None)
             os.utime(self._real_path, (self.stat.st_atime, self.stat.st_mtime))
+
+        def persist(self):
+            to_save = {
+                'data_uuid': self._data_uuid,
+                'stat': self.stat.to_dict()
+            }
+            self._fs.set_key(self.key, dumps(to_save).encode('utf-8'))
+            self._fs.on_change()
+
+        def progress(self, add_progress: iroh.AddProgress):
+            event_type = add_progress.type()
+            if event_type == iroh.AddProgressType.FOUND:
+                p = add_progress.as_found()
+                self._fs.logger.debug(f"add blob found: id: {p.id} name: {p.name} size: {p.size}")
+            elif event_type == iroh.AddProgressType.PROGRESS:
+                p = add_progress.as_progress()
+                self._fs.logger.debug(f"add blog progress: id: {p.id} offset: {p.offset}")
+            elif event_type == iroh.AddProgressType.DONE:
+                p = add_progress.as_done()
+                self._fs.logger.debug(f"add blob done: id: {p.id} hash: {p.hash}")
+            elif event_type == iroh.AddProgressType.ALL_DONE:
+                p = add_progress.as_all_done()
+                self._fs.logger.debug(f"add blob all done: hash: {p.hash} format: {p.format} tag: {p.tag}")
+            elif event_type == iroh.AddProgressType.ABORT:
+                p = add_progress.as_abort()
+                self._fs.logger.debug(f"add blob: error: {p.error}")
+            else:
+                self._fs.logger.warning(f"Unknown event adding blob: {event_type}")
 
         def commit(self):
             real_stat = os.stat(self._real_path)
             real_size = real_stat.st_size
+            self._data_uuid = str(uuid.uuid4())
             if self._data_entry and real_size == 0:
                 self._fs.iroh_doc._del(self._fs.iroh_author, self._data_key.encode('utf-8'))
             else:
@@ -633,17 +730,20 @@ class HoloFS(Fuse):
             self.stat.st_ctime = real_stat.st_ctime
             self.persist()
 
+
         @classmethod
         def mknod(cls, fs, mode, dev):
-            node_stat = HoloFS.Stat({
-                'st_mode': mode,
-                'st_dev': dev,
-                'st_nlink': 1,
-                'st_uid': os.getuid(),
-                'st_gid': os.getgid(),
-                'st_size': 0
-            })
-            new_file = cls(fs, node_stat)
+            node_contents = {
+                'stat': HoloFS.Stat({
+                    'st_mode': mode,
+                    'st_dev': dev,
+                    'st_nlink': 1,
+                    'st_uid': os.getuid(),
+                    'st_gid': os.getgid(),
+                    'st_size': 0
+                })
+            }
+            new_file = cls(fs, node_contents)
             new_file.persist()
             return new_file
 
@@ -661,45 +761,47 @@ class HoloFS(Fuse):
             return self.stat
 
     class SymLink(FSNode):
-        def __init__(self, fs, node_stat, node_uuid=None):
-            super().__init__(fs, node_stat, node_uuid)
-            self._data_key = f"data/{self.uuid}"
+        def __init__(self, fs, node_contents, node_uuid=None):
+            super().__init__(fs, node_contents, node_uuid)
+            # self._data_key = f"data/{self.uuid}"
             self._data_entry = None
-            self._target = ''
+            self._target = node_contents.get('target', None)
 
         @classmethod
         def symlink(cls, fs, target):
-            node_stat = HoloFS.Stat({
-                'st_mode': 0o0777 | stat.S_IFLNK,
-                'st_dev': 0,
-                'st_nlink': 1,
-                'st_uid': os.getuid(),
-                'st_gid': os.getgid(),
-                'st_size': len(target)
-            })
-            new_symlink = cls(fs, node_stat)
-            new_symlink._target = target
+            node_contents = {
+                'stat': HoloFS.Stat({
+                    'st_mode': 0o0777 | stat.S_IFLNK,
+                    'st_dev': 0,
+                    'st_nlink': 1,
+                    'st_uid': os.getuid(),
+                    'st_gid': os.getgid(),
+                    'st_size': len(target)
+                }),
+                'target': target,
+            }
+            new_symlink = cls(fs, node_contents)
             new_symlink.persist()
             return new_symlink
 
         def persist(self):
             to_save = {
-                'stat': self.stat.to_dict()
+                'stat': self.stat.to_dict(),
+                'target': self._target.encode('utf-8')
             }
             self._fs.set_key(self.key, dumps(to_save).encode('utf-8'))
-            self._fs.set_key(self._data_key, self._target.encode('utf-8'))
             self._fs.on_change()
 
         @property
         def target(self):
-            return self._fs.latest_contents(self._data_key).decode('utf-8')
+            return self._target
 
         def readlink(self):
             return self.target
 
     class Dir(FSNode):
-        def __init__(self, fs, node_stat, node_uuid=None):
-            super().__init__(fs, node_stat, node_uuid)
+        def __init__(self, fs, node_contents, node_uuid=None):
+            super().__init__(fs, node_contents, node_uuid)
 
         def _child_prefix(self):
             return f"fs/{self.uuid}/"
@@ -712,15 +814,17 @@ class HoloFS(Fuse):
 
         @classmethod
         def mkdir(cls, fs, mode):
-            dir_stat = HoloFS.Stat({
-                'st_mode': stat.S_IFDIR | mode ,
-                'st_dev': 0,
-                'st_nlink': 2,
-                'st_uid': os.getuid(),
-                'st_gid': os.getgid(),
-                'st_size': 0
-            })
-            new_dir = cls(fs, dir_stat)
+            contents = {
+                'stat': HoloFS.Stat({
+                    'st_mode': stat.S_IFDIR | mode ,
+                    'st_dev': 0,
+                    'st_nlink': 2,
+                    'st_uid': os.getuid(),
+                    'st_gid': os.getgid(),
+                    'st_size': 0
+                })
+            }
+            new_dir = cls(fs, contents)
             new_dir.persist()
             return new_dir
 
@@ -728,16 +832,16 @@ class HoloFS(Fuse):
             return HoloFS.DirEntry(self._fs, self._child_direntry_key(name, node_uuid))
 
         def child(self, name):
-            entry = self._fs.latest_prefix_one(self._child_search_key(name))
-            if not entry:
+            key, _ = self._fs.latest_prefix_one(self._child_search_key(name))
+            if not key:
                 return None
-            return HoloFS.DirEntry(self._fs, entry.key().decode('utf-8'))
+            return HoloFS.DirEntry(self._fs, key)
 
         def children(self):
-            entries = self._fs.latest_prefix_many(self._child_prefix())
+            entries = self._fs.latest_prefix_many(self._child_prefix()).items()
             dir_entries = []
-            for entry in entries:
-                dir_entries.append(HoloFS.DirEntry(self._fs, entry.key().decode('utf-8')))
+            for key, _ in entries:
+                dir_entries.append(HoloFS.DirEntry(self._fs, key))
             return dir_entries
 
     class FileHandle(object):
