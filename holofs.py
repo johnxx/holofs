@@ -690,7 +690,7 @@ class HoloFS(Fuse):
             if self.stat.st_size == 0:
                 os.truncate(self._real_path, 0)
             else:
-                self._data_entry = self._fs.latest_key_one(self._data_key)
+                self._data_entry = self._fs.iroh_latest_key_one(self._data_key)
                 self._fs.iroh_doc.export_file(self._data_entry, self._real_path, None)
             os.utime(self._real_path, (self.stat.st_atime, self.stat.st_mtime))
 
