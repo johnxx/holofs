@@ -41,13 +41,12 @@ class HoloFS(Fuse):
         self.last_resync = 0
 
         self.resync_interval = 3
-        self.refresh_interval = 3
 
         super(HoloFS, self).__init__(*args, **kwargs)
 
         # Debug logging
-        log_level = logging.DEBUG
-        # log_level = logging.INFO
+        # log_level = logging.DEBUG
+        log_level = logging.INFO
         # log_level = logging.WARNING
         self.logger = self._setup_logging(log_level)
 
@@ -215,9 +214,9 @@ class HoloFS(Fuse):
         return 0
 
     def _sync_fs(self):
-        self.logger.info("syncing...")
+        self.logger.debug("syncing filesystem structure to CRDT...")
         self.iroh_set_key('updates', self.crdt_doc.get_update())
-        self.logger.info("synced!")
+        self.logger.debug("synced!")
 
     def fsync(self, path, isfsyncfile, fh):
         self.logger.info(f"fsync: {path}")
@@ -273,7 +272,7 @@ class HoloFS(Fuse):
             return -errno.EIO
 
     def readlink(self, symlink_path):
-        self.logger.info(f"readlink: {symlink_path}")
+        self.logger.debug(f"readlink: {symlink_path}")
 
         symlink_direntry = self.root_direntry.walk(symlink_path)
         if not symlink_direntry:
@@ -441,10 +440,11 @@ class HoloFS(Fuse):
         if current_time > self.last_resync + self.resync_interval:
             self.resync()
         else:
-            self.logger.debug(f"Skipping resync: Last resync was {self.last_resync} seconds ago")
+            self.logger.debug("Skipping resync: last resync was " + str(
+                current_time - self.last_resync) + " seconds ago")
 
     def resync(self):
-        self.logger.info("Performing resync!")
+        self.logger.info("Performing Iroh resync!")
         conns = iroh_node.connections()
         node_addrs = []
         self.logger.debug("open connections: ")
