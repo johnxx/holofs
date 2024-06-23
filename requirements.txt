@@ -1,3 +1,4 @@
 cbor2
 iroh >= 0.17
 fuse-python
+pycrdt
