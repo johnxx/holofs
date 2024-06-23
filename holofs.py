@@ -118,21 +118,22 @@ class HoloFS(Fuse):
 
     def main(self, *args, **kwargs):
         print("Loading the filesystem...")
-        retries = 0
-        max_retries = 3
+        retries_left = 5
+        sleep_between = 3
 
-        while retries < max_retries:
+        while retries_left > 0:
             try:
                 self.root_node = self._load_root()
                 if self.root_node:
                     self.root_direntry = HoloFS.RootDirEntry(self)
                     break
             except Exception as e:
-                print(traceback.format_exc())
-                print("Trying %s more times to load the filesystem" % (max_retries - retries))
+                # print(traceback.format_exc())
+                self.logger.debug(traceback.format_exc())
+                print("Trying %s more times to load the filesystem {retries_left}")
             self.resync()
-            time.sleep(3)
-            retries += 1
+            time.sleep(sleep_between)
+            retries_left -= 1
         else:
             raise Exception("failed to load the filesystem")
         print("Connected to filesystem!")
@@ -175,6 +176,7 @@ class HoloFS(Fuse):
         return self.iroh_doc.get_many(query)
 
     def latest_prefix_one(self, prefix):
+        self.logger.debug("query one entry matching prefix: %s" % prefix)
         for k, v in self.crdt_doc['fs'].items():
             if k.startswith(prefix):
                 return k, v
@@ -186,6 +188,7 @@ class HoloFS(Fuse):
         return self.iroh_doc.get_one(query)
 
     def latest_key_one(self, key):
+        self.logger.debug("query latest entry for key: %s" % key)
         v = self.crdt_doc['fs'].get(key, None)
         if not v:
             return None, None
@@ -202,7 +205,6 @@ class HoloFS(Fuse):
         return self.iroh_doc.get_many(query)
 
     def release(self, path, flags, fh):
-        # @TODO: Guess this isn't quite right?
         self.logger.info(f"release: {path}")
         try:
             fh.release()
@@ -438,8 +440,11 @@ class HoloFS(Fuse):
         current_time = time.monotonic()
         if current_time > self.last_resync + self.resync_interval:
             self.resync()
+        else:
+            self.logger.debug(f"Skipping resync: Last resync was {self.last_resync} seconds ago")
 
     def resync(self):
+        self.logger.info("Performing resync!")
         conns = iroh_node.connections()
         node_addrs = []
         self.logger.debug("open connections: ")
@@ -586,25 +591,6 @@ class HoloFS(Fuse):
         @classmethod
         def node_key(cls, node_uuid):
             return f"stat/{node_uuid}.json"
-
-        # @classmethod
-        # def make(cls, fs, node_stat):
-        #     if stat.S_ISDIR(node_stat.st_mode):
-        #         new_node = HoloFS.Dir(fs, node_stat)
-        #     elif stat.S_ISREG(node_stat.st_mode):
-        #         new_node = HoloFS.File(fs, node_stat)
-        #     elif stat.S_ISLNK(node_stat.st_mode):
-        #         new_node = HoloFS.SymLink(fs, node_stat)
-        #     else:
-        #         node_type = stat.S_IFMT(node_stat.st_mode)
-        #         raise Exception(f"Unknown node type: {node_type}")
-
-        #     try:
-        #         new_node.persist()
-        #         return new_node
-        #     except Exception as e:
-        #         print(traceback.format_exc())
-        #         return -errno.EIO
 
         @classmethod
         def load(cls, fs, node_uuid):
@@ -837,9 +823,9 @@ class HoloFS(Fuse):
         def children(self):
             entries = self._fs.latest_prefix_many(self._child_prefix()).items()
             dir_entries = []
-            self.logger.debug(f"keys:")
+            self._fs.logger.debug(f"keys:")
             for key, _ in entries:
-                self.logger.debug(f"       {key}")
+                self._fs.logger.debug(f"       {key}")
                 dir_entries.append(HoloFS.DirEntry(self._fs, key))
             return dir_entries
 
