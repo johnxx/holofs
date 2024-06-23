@@ -555,6 +555,7 @@ class HoloFS(Fuse):
 
         def unlink(self):
             del self._fs.crdt_doc['fs'][self.key]
+            self._fs.on_change()
 
     class Stat(fuse.Stat):
         def __init__(self, *initial_data, **kwargs):
