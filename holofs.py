@@ -1,6 +1,8 @@
 import errno
 import logging
 import os
+import socket
+
 import pycrdt
 import queue
 import stat
@@ -100,6 +102,14 @@ class HoloFS(Fuse):
         self.crdt_doc = pycrdt.Doc()
 
         self.iroh_doc.subscribe(self)
+
+        host_block = {
+            'hostname': socket.gethostname(),
+            'node_id': iroh_node.to_string()
+
+        }
+        host_block_key = b'hosts/' + author.to_string().encode('utf-8')
+        self.iroh_doc.set_bytes(author, host_block_key, dumps(host_block).encode('utf-8'))
 
         self.resync()
 
@@ -461,12 +471,15 @@ class HoloFS(Fuse):
                 try:
                     update = update_entry.content_bytes(self.iroh_doc)
                 except Exception as e:
-                    author = update_entry.author().to_string()
-                    hash = update_entry.content_hash().to_string()
-                    ts = update_entry.timestamp()
-                    self.logger.warning(f"resync: Couldn't load blob: {hash} (author: {author} timestmp: {ts})")
-                    bdo = iroh.BlobDownloadOptions(iroh.BlobFormat.RAW, iroh.SetTagOption.auto(), None)
-                    self.iroh_node.blobs_download(update_entry.content_hash(), bdo)
+                    try:
+                        author = update_entry.author().to_string()
+                        hash = update_entry.content_hash().to_string()
+                        ts = update_entry.timestamp()
+                        author_host_block = b'hosts/' + author.encode('utf-8')
+                        self.logger.warning(f"resync: Couldn't load blob: {hash} (author: {author} timestmp: {ts}), re-requesting...")
+                        nodeAddr = self.latest_contents(')
+                        bdo = iroh.BlobDownloadOptions(iroh.BlobFormat.RAW, nodeAddr, iroh.SetTagOption.auto(), None)
+                        self.iroh_node.blobs_download(update_entry.content_hash(), bdo)
                     # print(traceback.format_exc())
                     continue
                 self.crdt_doc.apply_update(update)
