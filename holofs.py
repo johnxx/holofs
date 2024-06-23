@@ -167,9 +167,6 @@ class HoloFS(Fuse):
 
     def latest_prefix_many(self, prefix):
         self.logger.debug("query latest entries matching prefix: %s" % prefix)
-        self.logger.debug(f"keys:")
-        for k in self.crdt_doc['fs'].keys():
-            self.logger.debug(f"       {k}")
         return {k: v for k, v in self.crdt_doc['fs'].items() if k.startswith(prefix)}
 
     def iroh_latest_prefix_many(self, prefix):
@@ -840,7 +837,9 @@ class HoloFS(Fuse):
         def children(self):
             entries = self._fs.latest_prefix_many(self._child_prefix()).items()
             dir_entries = []
+            self.logger.debug(f"keys:")
             for key, _ in entries:
+                self.logger.debug(f"       {key}")
                 dir_entries.append(HoloFS.DirEntry(self._fs, key))
             return dir_entries
 
