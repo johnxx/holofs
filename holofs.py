@@ -17,6 +17,8 @@ from fuse import Fuse
 
 fuse.fuse_python_api = (0, 2)
 
+# import pydevd_pycharm
+
 def flag2mode(flags):
     access_mode = flags & os.O_ACCMODE
     md = {os.O_RDONLY: 'rb', os.O_WRONLY: 'wb', os.O_RDWR: 'wb+'}
@@ -95,6 +97,7 @@ class HoloFS(Fuse):
             raise Exception("unknown LiveEventType")
 
     def iroh_init(self, iroh_node, author, doc):
+        # pydevd_pycharm.settrace('localhost', port=23234, stdoutToServer=True, stderrToServer=True)
         self.iroh_node = iroh_node
         self.iroh_author = author
         self.iroh_doc = doc
@@ -105,8 +108,7 @@ class HoloFS(Fuse):
 
         host_block = {
             'hostname': socket.gethostname(),
-            'node_id': iroh_node.to_string()
-
+            'node_id': iroh_node.node_id()
         }
         host_block_key = b'hosts/' + author.to_string().encode('utf-8')
         self.iroh_doc.set_bytes(author, host_block_key, dumps(host_block).encode('utf-8'))
@@ -454,6 +456,7 @@ class HoloFS(Fuse):
                 current_time - self.last_resync) + " seconds ago")
 
     def resync(self):
+        # pydevd_pycharm.settrace('localhost', port=23234, stdoutToServer=True, stderrToServer=True)
         self.logger.info("Performing Iroh resync!")
         conns = iroh_node.connections()
         node_addrs = []
@@ -475,12 +478,14 @@ class HoloFS(Fuse):
                         author = update_entry.author().to_string()
                         hash = update_entry.content_hash().to_string()
                         ts = update_entry.timestamp()
-                        author_host_block = b'hosts/' + author.encode('utf-8')
                         self.logger.warning(f"resync: Couldn't load blob: {hash} (author: {author} timestmp: {ts}), re-requesting...")
-                        nodeAddr = self.latest_contents(')
-                        bdo = iroh.BlobDownloadOptions(iroh.BlobFormat.RAW, nodeAddr, iroh.SetTagOption.auto(), None)
+                        author_host_block = f"hosts/{author}"
+                        host_block = self.iroh_latest_contents(author_host_block).loads()
+                        node_addr = iroh.PublicKey.from_string(host_block['node_id'])
+                        bdo = iroh.BlobDownloadOptions(iroh.BlobFormat.RAW, node_addr, iroh.SetTagOption.auto(), None)
                         self.iroh_node.blobs_download(update_entry.content_hash(), bdo)
-                    # print(traceback.format_exc())
+                    except Exception as e:
+                        self.logger.warning(f"resync: Failed!")
                     continue
                 self.crdt_doc.apply_update(update)
                 self.logger.debug(f"     update applied!")
