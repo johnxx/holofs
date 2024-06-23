@@ -465,6 +465,8 @@ class HoloFS(Fuse):
                     hash = update_entry.content_hash().to_string()
                     ts = update_entry.timestamp()
                     self.logger.warning(f"resync: Couldn't load blob: {hash} (author: {author} timestmp: {ts})")
+                    bdo = iroh.BlobDownloadOptions(iroh.BlobFormat.RAW, iroh.SetTagOption.auto(), None)
+                    self.iroh_node.blobs_download(update_entry.content_hash(), bdo)
                     # print(traceback.format_exc())
                     continue
                 self.crdt_doc.apply_update(update)
