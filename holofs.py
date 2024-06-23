@@ -752,6 +752,7 @@ class HoloFS(Fuse):
                 })
             }
             new_file = cls(fs, node_contents)
+            os.mknod(new_file._real_path, mode=0o600 | stat.S_IFREG)
             # new_file.persist()
             new_file.commit()
             return new_file
