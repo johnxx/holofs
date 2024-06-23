@@ -655,7 +655,7 @@ class HoloFS(Fuse):
     class File(FSNode):
         def __init__(self, fs, node_contents, node_uuid=None):
             super().__init__(fs, node_contents, node_uuid)
-            self._data_uuid = str(uuid.uuid4())
+            self._data_uuid = node_contents.get('data_uuid', None)
             self._data_entry = None
 
         @property
@@ -752,7 +752,8 @@ class HoloFS(Fuse):
                 })
             }
             new_file = cls(fs, node_contents)
-            new_file.persist()
+            # new_file.persist()
+            new_file.commit()
             return new_file
 
         def open(self, flags, mode):
