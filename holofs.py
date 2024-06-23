@@ -13,8 +13,6 @@ import fuse
 import iroh
 from fuse import Fuse
 
-# import pydevd_pycharm
-
 fuse.fuse_python_api = (0, 2)
 
 def flag2mode(flags):
@@ -72,7 +70,7 @@ class HoloFS(Fuse):
             self.logger.info(f"LiveEvent - InsertLocal: entry hash {entry.content_hash().to_string()}")
         elif t == iroh.LiveEventType.INSERT_REMOTE:
             insert_remove_event = e.as_insert_remote()
-            self.resync_if_stale()
+            # self.resync_if_stale()
             key = insert_remove_event.entry.key().decode('utf-8')
             content_hash = insert_remove_event.entry.content_hash().to_string()
             self.logger.info(
@@ -141,17 +139,6 @@ class HoloFS(Fuse):
 
         self.logger.debug("entered: Fuse.main()")
         return Fuse.main(self, *args, **kwargs)
-
-    # def _load_fs_crdt(self):
-    #     key = 'updates'
-    #     self.logger.debug("iroh load: " + key)
-    #     entries = self.iroh_key_all_authors(key)
-    #     self.crdt_doc = pycrdt.Doc()
-    #     for entry in entries:
-    #         self.logger.debug("Applying update.")
-    #         update = entry.content_bytes(self.iroh_doc)
-    #         self.crdt_doc.apply_update(update)
-    #     return self.crdt_doc['fs']
 
     def _load_root(self):
         key = 'root_uuid'
@@ -456,7 +443,6 @@ class HoloFS(Fuse):
             self.resync()
 
     def resync(self):
-        # pydevd_pycharm.settrace('localhost', port=23234, stdoutToServer=True, stderrToServer=True, suspend=False)
         conns = iroh_node.connections()
         node_addrs = []
         self.logger.debug("open connections: ")
@@ -470,7 +456,11 @@ class HoloFS(Fuse):
         self.logger.debug("Applying updates:")
         for update_entry in self.iroh_key_all_authors('updates'):
             if update_entry:
-                update = update_entry.content_bytes(self.iroh_doc)
+                try:
+                    update = update_entry.content_bytes(self.iroh_doc)
+                except Exception as e:
+                    print(traceback.format_exc())
+                    continue
                 self.crdt_doc.apply_update(update)
                 self.logger.debug(f"     update applied!")
         self.crdt_doc['fs'] = pycrdt.Map()
@@ -797,7 +787,7 @@ class HoloFS(Fuse):
         def persist(self):
             to_save = {
                 'stat': self.stat.to_dict(),
-                'target': self._target.encode('utf-8')
+                'target': self._target
             }
             self._fs.set_key(self.key, dumps(to_save).encode('utf-8'))
             self._fs.on_change()
