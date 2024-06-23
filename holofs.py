@@ -554,7 +554,7 @@ class HoloFS(Fuse):
             return fuse.Direntry(self.name)
 
         def unlink(self):
-            self._fs.iroh_doc._del(self._fs.iroh_author, self.key.encode('utf-8'))
+            del self._fs.crdt_doc['fs'][self.key]
 
     class Stat(fuse.Stat):
         def __init__(self, *initial_data, **kwargs):
