@@ -46,8 +46,8 @@ class HoloFS(Fuse):
 
         # Debug logging
         # log_level = logging.DEBUG
-        log_level = logging.INFO
-        # log_level = logging.WARNING
+        # log_level = logging.INFO
+        log_level = logging.WARNING
         self.logger = self._setup_logging(log_level)
 
         self.queue = queue.Queue()
@@ -461,7 +461,11 @@ class HoloFS(Fuse):
                 try:
                     update = update_entry.content_bytes(self.iroh_doc)
                 except Exception as e:
-                    print(traceback.format_exc())
+                    author = update_entry.author().to_string()
+                    hash = update_entry.content_hash().to_string()
+                    ts = update_entry.timestamp()
+                    self.logger.warning(f"resync: Couldn't load blob: {hash} (author: {author} timestmp: {ts})")
+                    # print(traceback.format_exc())
                     continue
                 self.crdt_doc.apply_update(update)
                 self.logger.debug(f"     update applied!")
