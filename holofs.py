@@ -17,6 +17,7 @@ from fuse import Fuse
 
 fuse.fuse_python_api = (0, 2)
 
+
 # import pydevd_pycharm
 
 def flag2mode(flags):
@@ -28,6 +29,7 @@ def flag2mode(flags):
         m = m.replace('w', 'a', 1)
 
     return m
+
 
 class HoloFS(Fuse):
     def __init__(self, *args, **kwargs):
@@ -56,7 +58,8 @@ class HoloFS(Fuse):
 
         self.queue = queue.Queue()
 
-    def _setup_logging(self, log_level):
+    @staticmethod
+    def _setup_logging(log_level):
         logger = logging.getLogger('HoloFS')
         logger.setLevel(log_level)
         console = logging.StreamHandler()
@@ -70,28 +73,32 @@ class HoloFS(Fuse):
         t = e.type()
         if t == iroh.LiveEventType.INSERT_LOCAL:
             entry = e.as_insert_local()
-            self.logger.info(f"LiveEvent - InsertLocal: entry hash {entry.content_hash().to_string()}")
+            self.logger.info(f"iroh event: InsertLocal: entry hash {entry.content_hash().to_string()}")
         elif t == iroh.LiveEventType.INSERT_REMOTE:
             insert_remove_event = e.as_insert_remote()
             # self.resync_if_stale()
             key = insert_remove_event.entry.key().decode('utf-8')
             content_hash = insert_remove_event.entry.content_hash().to_string()
             self.logger.info(
-                f"LiveEvent - InsertRemote:\n\tfrom: {insert_remove_event._from}\n\tentry_key: {key}\n\tentry hash: {content_hash}\n\tcontent_status: {insert_remove_event.content_status}")
+                f"iroh event: insert_remote:\n\t"
+                f"from: {insert_remove_event._from}\n\t"
+                f"entry_key: {key}\n\t"
+                f"entry hash: {content_hash}\n\t"
+                f"content_status: {insert_remove_event.content_status}")
         elif t == iroh.LiveEventType.CONTENT_READY:
             hash_val = e.as_content_ready()
-            self.logger.info(f"LiveEvent - ContentReady: hash {hash_val.to_string()}")
+            self.logger.info(f"iroh event: content_ready: hash {hash_val.to_string()}")
         elif t == iroh.LiveEventType.NEIGHBOR_UP:
             node_id = e.as_neighbor_up()
-            self.logger.info(f"LiveEvent - NeighborUp: node id {node_id.to_string()}")
+            self.logger.info(f"iroh event: neighbor_up: node id {node_id.to_string()}")
         elif t == iroh.LiveEventType.NEIGHBOR_DOWN:
             node_id = e.as_neighbor_down()
-            self.logger.info(f"LiveEvent - NeighborDown: node id {node_id.to_string()}")
+            self.logger.info(f"iroh event: neighbor_down: node id {node_id.to_string()}")
         elif t == iroh.LiveEventType.SYNC_FINISHED:
             sync_event = e.as_sync_finished()
-            self.logger.info(f"LiveEvent - SyncFinished: synced peer: {sync_event.peer.to_string()}")
+            self.logger.info(f"iroh event: sync_finished: synced peer: {sync_event.peer.to_string()}")
         elif t == iroh.LiveEventType.PENDING_CONTENT_READY:
-            self.logger.info("LiveEvent - Pending content ready!")
+            self.logger.info("iroh event: pending_content_ready")
         else:
             self.logger.error(str(t))
             raise Exception("unknown LiveEventType")
@@ -486,7 +493,8 @@ class HoloFS(Fuse):
             addrs = []
             for addr in conn.addrs:
                 addrs.append(addr.addr())
-            node_addrs[conn.node_id.to_string()] = iroh.NodeAddr(node_id=conn.node_id, relay_url=conn.relay_url, addresses=addrs)
+            node_addrs[conn.node_id.to_string()] = iroh.NodeAddr(node_id=conn.node_id, relay_url=conn.relay_url,
+                                                                 addresses=addrs)
             self.logger.debug("     " + conn.node_id.fmt_short())
         self.iroh_doc.start_sync(node_addrs.values())
         self.logger.debug("Applying updates:")
@@ -496,14 +504,16 @@ class HoloFS(Fuse):
                     update = update_entry.content_bytes(self.iroh_doc)
                 except Exception as e:
                     try:
-                        author = update_entry.author().to_string()
-                        hash = update_entry.content_hash().to_string()
+                        update_author = update_entry.author().to_string()
+                        update_hash = update_entry.content_hash().to_string()
                         ts = update_entry.timestamp()
-                        self.logger.warning(f"resync: Couldn't load blob: {hash} (author: {author} timestmp: {ts}), re-requesting...")
-                        author_host_block = f"hosts/{author}"
+                        self.logger.warning(
+                            f"resync: Trying again: blob: {update_hash} (author: {update_author} timestmp: {ts})")
+                        author_host_block = f"hosts/{update_author}"
                         host_block = loads(self.iroh_latest_contents(author_host_block))
                         if host_block['node_id'] in node_addrs:
-                            bdo = iroh.BlobDownloadOptions(iroh.BlobFormat.RAW, node_addrs[host_block['node_id']], iroh.SetTagOption.auto())
+                            bdo = iroh.BlobDownloadOptions(iroh.BlobFormat.RAW, node_addrs[host_block['node_id']],
+                                                           iroh.SetTagOption.auto())
                             self.iroh_node.blobs_download(update_entry.content_hash(), bdo, self)
                     except Exception as e:
                         # print(traceback.format_exc())
@@ -527,7 +537,7 @@ class HoloFS(Fuse):
             return -errno.EIO
 
     def read(self, path, length, offset, fh):
-        self.logger.info("read: " + path)
+        self.logger.info(f"read:  {path} ({length}@{offset})")
         try:
             return fh.read(length, offset)
         except Exception as e:
@@ -560,6 +570,14 @@ class HoloFS(Fuse):
             return -errno.EIO
 
     class WalkableDirEntry(object):
+        def __init__(self, fs):
+            self._fs = fs
+            if not isinstance(fs, HoloFS):
+                raise Exception("fs must be a fully initialized HoloFS")
+
+        def node(self):
+            raise NotImplementedError
+
         def walk(self, path):
             if type(path) is str:
                 path = list(filter(None, path.removeprefix('/').split('/')))
@@ -574,19 +592,12 @@ class HoloFS(Fuse):
                 return next_direntry.walk(path)
 
     class RootDirEntry(WalkableDirEntry):
-        def __init__(self, fs):
-            self._fs = fs
-            if not isinstance(fs, HoloFS):
-                raise Exception("fs must be a fully initialized HoloFS")
-
         def node(self):
             return self._fs.root_node
 
     class DirEntry(WalkableDirEntry):
         def __init__(self, fs, key):
-            self._fs = fs
-            if not isinstance(fs, HoloFS):
-                raise Exception("fs must be a fully initialized HoloFS")
+            super().__init__(fs)
             self.key = key
             _, self.parent_uuid, self.name, self.node_uuid = self.key.split('/')
 
@@ -684,36 +695,38 @@ class HoloFS(Fuse):
             return f"data/{self._data_uuid}"
 
         @property
-        def _real_path(self):
+        def real_path(self):
             return os.path.join(self._fs.state_dir, f"data/{self.uuid}")
 
-        def _refresh_if_stale(self):
+        def refresh_if_stale(self):
             should_refresh = True
+            self._fs.resync_if_stale()
             try:
                 contents = loads(self._fs.latest_contents(self.key))
                 self.stat = HoloFS.Stat(contents.get('stat'))
-                real_stat = os.stat(self._real_path)
-                if real_stat.st_mtime >= self.stat.st_mtime:
+                real_stat = os.stat(self.real_path)
+                if (real_stat.st_mtime >= self.stat.st_mtime and
+                        real_stat.st_size == self.stat.st_size):
                     should_refresh = False
             except Exception as e:
                 pass
             if should_refresh:
-                return self._refresh()
+                return self.refresh()
 
-        def _refresh(self):
-            self._fs.logger.debug(f"_refresh: {self.key} (data: {self._data_key})")
+        def refresh(self):
+            self._fs.logger.debug(f"refresh: {self.key} (data: {self._data_key})")
             self._fs.resync_if_stale()
             try:
-                os.mknod(self._real_path, mode=0o600 | stat.S_IFREG)
+                os.mknod(self.real_path, mode=0o600 | stat.S_IFREG)
             except FileExistsError:
                 pass
 
             if self.stat.st_size == 0:
-                os.truncate(self._real_path, 0)
+                os.truncate(self.real_path, 0)
             else:
                 self._data_entry = self._fs.iroh_latest_key_one(self._data_key)
-                self._fs.iroh_doc.export_file(self._data_entry, self._real_path, None)
-            os.utime(self._real_path, (self.stat.st_atime, self.stat.st_mtime))
+                self._fs.iroh_doc.export_file(self._data_entry, self.real_path, None)
+            os.utime(self.real_path, (self.stat.st_atime, self.stat.st_mtime))
 
         def persist(self):
             to_save = {
@@ -744,13 +757,13 @@ class HoloFS(Fuse):
                 self._fs.logger.warning(f"Unknown event adding blob: {event_type}")
 
         def commit(self):
-            real_stat = os.stat(self._real_path)
+            real_stat = os.stat(self.real_path)
             real_size = real_stat.st_size
             self._data_uuid = str(uuid.uuid4())
             if self._data_entry and real_size == 0:
                 self._fs.iroh_doc._del(self._fs.iroh_author, self._data_key.encode('utf-8'))
             else:
-                self._fs.iroh_doc.import_file(self._fs.iroh_author, self._data_key.encode('utf-8'), self._real_path,
+                self._fs.iroh_doc.import_file(self._fs.iroh_author, self._data_key.encode('utf-8'), self.real_path,
                                               False, None)
 
             self.stat.st_size = real_stat.st_size
@@ -758,7 +771,6 @@ class HoloFS(Fuse):
             self.stat.st_mtime = real_stat.st_mtime
             self.stat.st_ctime = real_stat.st_ctime
             self.persist()
-
 
         @classmethod
         def mknod(cls, fs, mode, dev):
@@ -773,19 +785,19 @@ class HoloFS(Fuse):
                 })
             }
             new_file = cls(fs, node_contents)
-            os.mknod(new_file._real_path, mode=0o600 | stat.S_IFREG)
+            os.mknod(new_file.real_path, mode=0o600 | stat.S_IFREG)
             # new_file.persist()
             new_file.commit()
             return new_file
 
         def open(self, flags, mode):
-            self._refresh_if_stale()
+            self.refresh_if_stale()
             return HoloFS.FileHandle(self, flags, mode)
 
         def truncate(self, length):
             if length > 0:
-                self._refresh_if_stale()
-            os.truncate(self._real_path, length)
+                self.refresh_if_stale()
+            os.truncate(self.real_path, length)
             self.commit()
 
         def getattr(self):
@@ -847,7 +859,7 @@ class HoloFS(Fuse):
         def mkdir(cls, fs, mode):
             contents = {
                 'stat': HoloFS.Stat({
-                    'st_mode': stat.S_IFDIR | mode ,
+                    'st_mode': stat.S_IFDIR | mode,
                     'st_dev': 0,
                     'st_nlink': 2,
                     'st_uid': os.getuid(),
@@ -880,32 +892,42 @@ class HoloFS(Fuse):
     class FileHandle(object):
         def __init__(self, fsnode, flags, mode):
             self.node = fsnode
-            self.file = os.fdopen(os.open(fsnode._real_path, flags, mode), flag2mode(flags))
+            self.file = os.fdopen(os.open(fsnode.real_path, flags, mode), flag2mode(flags))
             self.fd = self.file.fileno()
+            self._dirty = False
 
         def read(self, length, offset):
-            self.node._refresh_if_stale()
+            self.node.refresh_if_stale()
             return os.pread(self.fd, length, offset)
 
         def ftruncate(self, length):
-            self.node._refresh_if_stale()
-            os.truncate(self.node._real_path, length)
-            self.node.commit()
+            self.node.refresh_if_stale()
+            os.truncate(self.node.real_path, length)
+            if self._dirty:
+                self.node.commit()
+                self._dirty = False
 
         def write(self, buf, offset):
+            self._dirty = True
             return os.pwrite(self.fd, buf, offset)
 
         def release(self):
             self.file.close()
-            self.node.commit()
+            if self._dirty:
+                self.node.commit()
+                self._dirty = False
 
         def fsync(self, issyncfile):
             os.fsync(self.fd)
-            self.node.commit()
+            if self._dirty:
+                self.node.commit()
+                self._dirty = False
 
         def flush(self):
             os.fsync(self.fd)
-            self.node.commit()
+            if self._dirty:
+                self.node.commit()
+                self._dirty = False
 
         def fgetattr(self):
             return self.node.stat
