@@ -455,19 +455,40 @@ class HoloFS(Fuse):
             self.logger.debug("Skipping resync: last resync was " + str(
                 current_time - self.last_resync) + " seconds ago")
 
+    def progress(self, dl_progress: iroh.DownloadProgress):
+        event_type = dl_progress.type()
+        if event_type == iroh.DownloadProgressType.INITIAL_STATE:
+            self._fs.logger.debug(f"Download progress: Initial state")
+        elif event_type == iroh.DownloadProgressType.FOUND_LOCAL:
+            self._fs.logger.debug(f"Download progress: Found locally")
+        elif event_type == iroh.DownloadProgressType.CONNECTED:
+            self._fs.logger.debug(f"Download progress: Connected")
+        elif event_type == iroh.DownloadProgressType.FOUND:
+            self._fs.logger.debug(f"Download progress: Found")
+        elif event_type == iroh.DownloadProgressType.FOUND_HASH_SEQ:
+            self._fs.logger.debug(f"Download progress: Found Hash Sequence")
+        elif event_type == iroh.DownloadProgressType.PROGRESS:
+            self._fs.logger.debug(f"Download progress: Progress!")
+        elif event_type == iroh.DownloadProgressType.DONE:
+            self._fs.logger.debug(f"Download progress: Done!")
+        elif event_type == iroh.DownloadProgressType.ALL_DONE:
+            self._fs.logger.debug(f"Download progress: All Done!")
+        elif event_type == iroh.DownloadProgressType.ABORT:
+            self._fs.logger.debug(f"Download progress: Aborted!")
+
     def resync(self):
         # pydevd_pycharm.settrace('localhost', port=23234, stdoutToServer=True, stderrToServer=True)
         self.logger.info("Performing Iroh resync!")
         conns = iroh_node.connections()
-        node_addrs = []
+        node_addrs = {}
         self.logger.debug("open connections: ")
         for conn in conns:
             addrs = []
             for addr in conn.addrs:
                 addrs.append(addr.addr())
-            node_addrs.append(iroh.NodeAddr(node_id=conn.node_id, relay_url=conn.relay_url, addresses=addrs))
+            node_addrs[conn.node_id.to_string()] = iroh.NodeAddr(node_id=conn.node_id, relay_url=conn.relay_url, addresses=addrs)
             self.logger.debug("     " + conn.node_id.fmt_short())
-        self.iroh_doc.start_sync(node_addrs)
+        self.iroh_doc.start_sync(node_addrs.values())
         self.logger.debug("Applying updates:")
         for update_entry in self.iroh_key_all_authors('updates'):
             if update_entry:
@@ -480,12 +501,14 @@ class HoloFS(Fuse):
                         ts = update_entry.timestamp()
                         self.logger.warning(f"resync: Couldn't load blob: {hash} (author: {author} timestmp: {ts}), re-requesting...")
                         author_host_block = f"hosts/{author}"
-                        host_block = self.iroh_latest_contents(author_host_block).loads()
-                        node_addr = iroh.PublicKey.from_string(host_block['node_id'])
-                        bdo = iroh.BlobDownloadOptions(iroh.BlobFormat.RAW, node_addr, iroh.SetTagOption.auto(), None)
-                        self.iroh_node.blobs_download(update_entry.content_hash(), bdo)
+                        host_block = loads(self.iroh_latest_contents(author_host_block))
+                        if host_block['node_id'] in node_addrs:
+                            bdo = iroh.BlobDownloadOptions(iroh.BlobFormat.RAW, node_addrs[host_block['node_id']], iroh.SetTagOption.auto())
+                            self.iroh_node.blobs_download(update_entry.content_hash(), bdo, self)
                     except Exception as e:
-                        self.logger.warning(f"resync: Failed!")
+                        # print(traceback.format_exc())
+                        a = update_entry.author().to_string()
+                        self.logger.warning(f"resync: Failed with author: {a}!")
                     continue
                 self.crdt_doc.apply_update(update)
                 self.logger.debug(f"     update applied!")
