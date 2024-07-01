@@ -73,12 +73,12 @@ class HoloFS(Fuse):
         t = e.type()
         if t == iroh.LiveEventType.INSERT_LOCAL:
             entry = e.as_insert_local()
-            self.logger.info(f"iroh event: InsertLocal: entry hash {entry.content_hash().to_string()}")
+            self.logger.info(f"iroh event: InsertLocal: entry hash {str(entry.content_hash())}")
         elif t == iroh.LiveEventType.INSERT_REMOTE:
             insert_remove_event = e.as_insert_remote()
             # self.resync_if_stale()
             key = insert_remove_event.entry.key().decode('utf-8')
-            content_hash = insert_remove_event.entry.content_hash().to_string()
+            content_hash = str(insert_remove_event.entry.content_hash())
             self.logger.info(
                 f"iroh event: insert_remote:\n\t"
                 f"from: {insert_remove_event._from}\n\t"
@@ -87,16 +87,16 @@ class HoloFS(Fuse):
                 f"content_status: {insert_remove_event.content_status}")
         elif t == iroh.LiveEventType.CONTENT_READY:
             hash_val = e.as_content_ready()
-            self.logger.info(f"iroh event: content_ready: hash {hash_val.to_string()}")
+            self.logger.info(f"iroh event: content_ready: hash {str(hash_val)}")
         elif t == iroh.LiveEventType.NEIGHBOR_UP:
             node_id = e.as_neighbor_up()
-            self.logger.info(f"iroh event: neighbor_up: node id {node_id.to_string()}")
+            self.logger.info(f"iroh event: neighbor_up: node id {str(node_id)}")
         elif t == iroh.LiveEventType.NEIGHBOR_DOWN:
             node_id = e.as_neighbor_down()
-            self.logger.info(f"iroh event: neighbor_down: node id {node_id.to_string()}")
+            self.logger.info(f"iroh event: neighbor_down: node id {str(node_id)}")
         elif t == iroh.LiveEventType.SYNC_FINISHED:
             sync_event = e.as_sync_finished()
-            self.logger.info(f"iroh event: sync_finished: synced peer: {sync_event.peer.to_string()}")
+            self.logger.info(f"iroh event: sync_finished: synced peer: {str(sync_event.peer)}")
         elif t == iroh.LiveEventType.PENDING_CONTENT_READY:
             self.logger.info("iroh event: pending_content_ready")
         else:
@@ -117,7 +117,7 @@ class HoloFS(Fuse):
             'hostname': socket.gethostname(),
             'node_id': iroh_node.node_id()
         }
-        host_block_key = b'hosts/' + author.to_string().encode('utf-8')
+        host_block_key = b'hosts/' + str(author).encode('utf-8')
         self.iroh_doc.set_bytes(author, host_block_key, dumps(host_block).encode('utf-8'))
 
         self.resync()
@@ -493,7 +493,7 @@ class HoloFS(Fuse):
             addrs = []
             for addr in conn.addrs:
                 addrs.append(addr.addr())
-            node_addrs[conn.node_id.to_string()] = iroh.NodeAddr(node_id=conn.node_id, relay_url=conn.relay_url,
+            node_addrs[str(conn.node_id)] = iroh.NodeAddr(node_id=conn.node_id, relay_url=conn.relay_url,
                                                                  addresses=addrs)
             self.logger.debug("     " + conn.node_id.fmt_short())
         self.iroh_doc.start_sync(node_addrs.values())
@@ -504,8 +504,8 @@ class HoloFS(Fuse):
                     update = update_entry.content_bytes(self.iroh_doc)
                 except Exception as e:
                     try:
-                        update_author = update_entry.author().to_string()
-                        update_hash = update_entry.content_hash().to_string()
+                        update_author = str(update_entry.author())
+                        update_hash = str(update_entry.content_hash())
                         ts = update_entry.timestamp()
                         self.logger.warning(
                             f"resync: Trying again: blob: {update_hash} (author: {update_author} timestmp: {ts})")
@@ -517,7 +517,7 @@ class HoloFS(Fuse):
                             self.iroh_node.blobs_download(update_entry.content_hash(), bdo, self)
                     except Exception as e:
                         # print(traceback.format_exc())
-                        a = update_entry.author().to_string()
+                        a = str(update_entry.author())
                         self.logger.warning(f"resync: Failed with author: {a}!")
                     continue
                 self.crdt_doc.apply_update(update)
@@ -986,7 +986,7 @@ if __name__ == '__main__':
             print("Creating new author ...")
             author = iroh_node.author_create()
 
-    print("Assumed author id: {}".format(author.to_string()))
+    print("Assumed author id: {}".format(str(author)))
 
     if ticket_id:
         doc = iroh_node.doc_join(ticket_id)
